@@ -1,0 +1,21 @@
+# dotnet
+bin/
+obj/
+*.user
+*.Backup.tmp
+*.log
+
+# sqlite
+*.db
+*.db-shm
+*.db-wal
+
+# node
+node_modules/
+dist/
+
+# misc
+.env
+
+#notes
+*.txt

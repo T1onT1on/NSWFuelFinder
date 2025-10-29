@@ -1,0 +1,8 @@
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f5f5; }
+.ant-layout { min-height: 100%; }
+.page-header { margin-bottom: 24px; }
+.filter-card { margin-bottom: 24px; }
+.table-toolbar { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.full-width { width: 100%; }
+
