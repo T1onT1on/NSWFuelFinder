@@ -57,3 +57,6 @@ It demonstrates:
 cd backend
 dotnet restore
 dotnet run
+```
+
+more details will be updated...
