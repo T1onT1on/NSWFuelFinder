@@ -5,6 +5,14 @@ obj/
 *.Backup.tmp
 *.log
 
+# Visual Studio / VSCode
+.vs/
+.vscode/
+*.suo
+*.user
+*.cache
+*.pdb
+
 # sqlite
 *.db
 *.db-shm
@@ -19,3 +27,7 @@ dist/
 
 #notes
 *.txt
+
+# OS
+Thumbs.db
+.DS_Store

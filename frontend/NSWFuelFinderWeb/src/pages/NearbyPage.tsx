@@ -1,46 +1,53 @@
+// src/pages/NearbyPage.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Button,
-  Card,
-  Form,
-  Input,
-  InputNumber,
-  Result,
-  Select,
-  Space,
+  Stack,
   Typography,
-  message,
-} from "antd";
+  Card,
+  CardContent,
+  CircularProgress,
+  Alert,
+  Button,
+} from "@mui/material";
+import SearchIcon from "@mui/icons-material/Search";
+
 import { fuelDisplayOrder } from "../utils/fuelColors";
-import { StationsTable } from "../components/StationsTable";
+import StationsDataGrid from "../components/tables/StationsDataGrid";
+import SearchFiltersCard from "../components/filters/SearchFiltersCard";
 import { useNearbyStations, type NearbyFilter } from "../hooks/queries";
 import type { NearbyFuelStation } from "../types";
 
+/** Page-level search mode */
 type SearchMode = "location" | "suburb" | null;
 
+/** Form shape we keep in local state */
 type FormValues = {
   latitude?: number;
   longitude?: number;
   suburb?: string;
   radiusKm?: number;
   fuelTypes?: string[];
-  brands?: string[];
+  brands?: string[]; // brand names
   volumeLitres?: number;
   sortBy?: "distance" | "price";
   sortOrder?: "asc" | "desc";
 };
 
+/** Persisted state saved in module scope to keep UX across navigation */
 type PersistedState = {
   mode: Exclude<SearchMode, null>;
   formValues: FormValues;
   searchParams: NearbyFilter | null;
 };
 
+// ---------- constants ----------
 const defaultRadiusKm = 5;
 const fuelTypeOptions = fuelDisplayOrder.map((value) => ({ label: value, value }));
 
+// Persist between mounts within the same JS runtime
 let persistedState: PersistedState | null = null;
 
+// ---------- helpers ----------
 const buildDefaultFormValues = (): FormValues => ({
   latitude: undefined,
   longitude: undefined,
@@ -54,104 +61,91 @@ const buildDefaultFormValues = (): FormValues => ({
 });
 
 const volumeEquals = (a?: number, b?: number) => {
-  if (a == null && b == null) {
-    return true;
-  }
-  if (a == null || b == null) {
-    return false;
-  }
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
   return Math.abs(a - b) < 0.0001;
 };
 
 export const NearbyPage: React.FC = () => {
+  // ---------- persisted bootstrapping ----------
   const initialPersisted = useRef(persistedState);
-  const initialVolume = initialPersisted.current?.formValues.volumeLitres;
-  const [mode, setMode] = useState<SearchMode>(initialPersisted.current?.mode ?? null);
+  const initialMode = initialPersisted.current?.mode ?? null;
+  const initialForm = initialPersisted.current?.formValues ?? buildDefaultFormValues();
+  const initialVolume = initialForm.volumeLitres;
+
+  // ---------- local UI states ----------
+  const [mode, setMode] = useState<SearchMode>(initialMode);
+  const [formVals, setFormVals] = useState<FormValues>(initialForm);
   const [searchParams, setSearchParams] = useState<NearbyFilter | null>(
     initialPersisted.current?.searchParams ?? null
   );
+
   const [geolocating, setGeolocating] = useState(false);
-  const geolocationSupported = typeof navigator !== "undefined" && Boolean(navigator.geolocation);
-  const [form] = Form.useForm<FormValues>();
-  const [costCalcExpanded, setCostCalcExpanded] = useState<boolean>(Boolean(initialVolume));
+  const geolocationSupported =
+    typeof navigator !== "undefined" && Boolean(navigator.geolocation);
+
+  const [/*costCalcExpanded*/ /* kept for API parity */, setCostCalcExpanded] =
+    useState<boolean>(Boolean(initialVolume));
   const [volumeInput, setVolumeInput] = useState<number | undefined>(initialVolume);
   const [appliedVolume, setAppliedVolume] = useState<number | undefined>(initialVolume);
-  const [hasFilterChanges, setHasFilterChanges] = useState<boolean>(!initialPersisted.current);
-  const [hasPendingVolumeChange, setHasPendingVolumeChange] = useState<boolean>(false);
-  const isApplyingFormValues = useRef(false);
 
-  const applyFormValues = (values: Partial<FormValues>) => {
-    isApplyingFormValues.current = true;
-    form.setFieldsValue(values);
-    setTimeout(() => {
-      isApplyingFormValues.current = false;
-    }, 0);
-  };
+  const [hasFilterChanges, setHasFilterChanges] = useState<boolean>(
+    !initialPersisted.current
+  );
+  const [hasPendingVolumeChange, setHasPendingVolumeChange] =
+    useState<boolean>(false);
 
-  const handleFormValuesChange = () => {
-    if (isApplyingFormValues.current) {
-      return;
-    }
-    setHasFilterChanges(true);
-  };
-
-  const handleVolumeInputChange = (value: number | null) => {
-    const nextVolume = value ?? undefined;
-    setVolumeInput(nextVolume);
-    setHasPendingVolumeChange(!volumeEquals(nextVolume, appliedVolume));
-    setHasFilterChanges(true);
-  };
-
-  useEffect(() => {
-    if (initialPersisted.current) {
-      applyFormValues(initialPersisted.current.formValues);
-      const volume = initialPersisted.current.formValues.volumeLitres;
-      setAppliedVolume(volume);
-      setVolumeInput(volume);
-      setCostCalcExpanded(Boolean(volume));
-      setHasFilterChanges(false);
-      setHasPendingVolumeChange(false);
-    } else {
-      applyFormValues(buildDefaultFormValues());
-      setAppliedVolume(undefined);
-      setVolumeInput(undefined);
-      setCostCalcExpanded(false);
-      setHasFilterChanges(true);
-      setHasPendingVolumeChange(false);
-    }
-  }, [form]);
-
+  // ---------- data ----------
   const { data, isLoading, isError } = useNearbyStations(searchParams);
-  const stations: NearbyFuelStation[] = useMemo(() => data?.stations ?? [], [data]);
-  const availableBrands = useMemo(() => data?.availableBrands ?? [], [data?.availableBrands]);
+  const stations: NearbyFuelStation[] = useMemo(
+    () => data?.stations ?? [],
+    [data]
+  );
+
+  // Build brand options (prefer API; fallback to result set)
+  const availableBrands = useMemo(
+    () => data?.availableBrands ?? [],
+    [data?.availableBrands]
+  );
   const brandOptions = useMemo(() => {
-    const normalizedBrands = availableBrands
-      .filter((brand): brand is string => typeof brand === "string" && brand.trim().length > 0)
-      .map((brand) => brand.trim());
-
-    if (normalizedBrands.length > 0) {
-      return Array.from(new Set(normalizedBrands))
-        .sort((a, b) => a.localeCompare(b))
-        .map((value) => ({ label: value, value }));
+    const normalized = (availableBrands ?? [])
+      .filter((b): b is string => typeof b === "string" && b.trim().length > 0)
+      .map((b) => b.trim());
+    if (normalized.length) {
+      return Array.from(new Set(normalized)).sort((a, b) => a.localeCompare(b));
     }
-
-    const fallbackBrands = Array.from(
-      stations.reduce((set, station) => {
-        if (station.brand) {
-          set.add(station.brand.trim());
-        }
+    const fallback = Array.from(
+      stations.reduce((set, s) => {
+        if (s.brand) set.add(s.brand.trim());
         return set;
       }, new Set<string>())
-    ).filter((brand) => brand.length > 0);
-
-    return fallbackBrands
-      .sort((a, b) => a.localeCompare(b))
-      .map((value) => ({ label: value, value }));
+    ).filter((b) => b.length > 0);
+    return fallback.sort((a, b) => a.localeCompare(b));
   }, [availableBrands, stations]);
 
-  const applyDefaultFormValues = () => {
-    form.resetFields();
-    applyFormValues(buildDefaultFormValues());
+  // ---------- effects ----------
+  useEffect(() => {
+    // align pending state for volume at mount
+    setHasPendingVolumeChange(!volumeEquals(volumeInput, appliedVolume));
+    // keep advanced card open state aligned (not strictly necessary)
+    setCostCalcExpanded(Boolean(initialVolume));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------- handlers ----------
+  const patchForm = (patch: Partial<FormValues>) => {
+    setFormVals((prev) => ({ ...prev, ...patch }));
+    setHasFilterChanges(true);
+  };
+
+  const handleModeSelect = (target: Exclude<SearchMode, null>) => {
+    if (mode === target) return;
+    setMode(target);
+    setSearchParams(null);
+    persistedState = null;
+
+    const next = buildDefaultFormValues();
+    setFormVals(next);
     setAppliedVolume(undefined);
     setVolumeInput(undefined);
     setCostCalcExpanded(false);
@@ -159,36 +153,18 @@ export const NearbyPage: React.FC = () => {
     setHasPendingVolumeChange(false);
   };
 
-  const handleModeSelect = (targetMode: Exclude<SearchMode, null>) => {
-    if (mode === targetMode) {
-      return;
-    }
-    setMode(targetMode);
-    setSearchParams(null);
-    persistedState = null;
-    initialPersisted.current = null;
-    applyDefaultFormValues();
-  };
-
   const handleLocate = () => {
-    if (!geolocationSupported) {
-      message.warning("Geolocation is not supported in this browser.");
-      return;
-    }
+    if (!geolocationSupported) return;
     setGeolocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const latitude = Number(position.coords.latitude.toFixed(4));
         const longitude = Number(position.coords.longitude.toFixed(4));
-        applyFormValues({
-          latitude,
-          longitude,
-        });
-        setHasFilterChanges(true);
+        patchForm({ latitude, longitude });
         setGeolocating(false);
       },
       (error) => {
-        message.error(`Unable to retrieve location: ${error.message}`);
+        console.warn("Geolocation error:", error.message);
         setGeolocating(false);
       }
     );
@@ -196,34 +172,34 @@ export const NearbyPage: React.FC = () => {
 
   const performSearch = (): boolean => {
     if (!mode) {
-      message.warning("Select a search mode first.");
+      console.warn("Select a search mode first.");
       return false;
     }
 
-    const rawValues = form.getFieldsValue();
-    const radius = Math.min(Math.max(rawValues.radiusKm ?? defaultRadiusKm, 1), 50);
-    const trimmedSuburb = rawValues.suburb?.trim() || undefined;
-    const sortByValue = rawValues.sortBy ?? "distance";
-    const sortOrderValue = rawValues.sortOrder ?? "asc";
+    const radius = Math.min(Math.max(formVals.radiusKm ?? defaultRadiusKm, 1), 50);
+    const trimmedSuburb = formVals.suburb?.trim() || undefined;
+    const sortByValue = formVals.sortBy ?? "distance";
+    const sortOrderValue = formVals.sortOrder ?? "asc";
     const normalizedBrands =
-      (rawValues.brands ?? [])
-        .map((brand) => (typeof brand === "string" ? brand.trim() : ""))
-        .filter((brand): brand is string => brand.length > 0) ?? [];
-    const volumeFromState = appliedVolume && appliedVolume > 0 ? appliedVolume : undefined;
+      (formVals.brands ?? [])
+        .map((b) => (typeof b === "string" ? b.trim() : ""))
+        .filter((b): b is string => b.length > 0) ?? [];
+    const volumeFromState =
+      appliedVolume && appliedVolume > 0 ? appliedVolume : undefined;
 
     let filter: NearbyFilter | null = null;
 
     if (mode === "location") {
-      if (rawValues.latitude == null || rawValues.longitude == null) {
-        message.error("Latitude and longitude are required for location search.");
+      if (formVals.latitude == null || formVals.longitude == null) {
+        console.warn("Latitude and longitude are required for location search.");
         return false;
       }
       filter = {
-        latitude: rawValues.latitude,
-        longitude: rawValues.longitude,
+        latitude: formVals.latitude,
+        longitude: formVals.longitude,
         radiusKm: radius,
         suburb: trimmedSuburb,
-        fuelTypes: rawValues.fuelTypes,
+        fuelTypes: formVals.fuelTypes,
         brands: normalizedBrands,
         volumeLitres: volumeFromState,
         sortBy: sortByValue,
@@ -231,13 +207,13 @@ export const NearbyPage: React.FC = () => {
       };
     } else {
       if (!trimmedSuburb) {
-        message.error("Please enter a suburb to search.");
+        console.warn("Please enter a suburb to search.");
         return false;
       }
       filter = {
         suburb: trimmedSuburb,
         radiusKm: radius,
-        fuelTypes: rawValues.fuelTypes,
+        fuelTypes: formVals.fuelTypes,
         brands: normalizedBrands,
         volumeLitres: volumeFromState,
         sortBy: sortByValue,
@@ -245,7 +221,9 @@ export const NearbyPage: React.FC = () => {
       };
     }
 
-    const nextFormValues: FormValues = {
+    // persist in form
+    setFormVals((prev) => ({
+      ...prev,
       latitude: filter.latitude,
       longitude: filter.longitude,
       suburb: filter.suburb,
@@ -255,16 +233,25 @@ export const NearbyPage: React.FC = () => {
       volumeLitres: volumeFromState,
       sortBy: sortByValue,
       sortOrder: sortOrderValue,
-    };
+    }));
 
-    applyFormValues(nextFormValues);
     setSearchParams(filter);
     persistedState = {
       mode: mode,
-      formValues: nextFormValues,
+      formValues: {
+        latitude: filter.latitude,
+        longitude: filter.longitude,
+        suburb: filter.suburb,
+        radiusKm: filter.radiusKm,
+        fuelTypes: filter.fuelTypes ?? [],
+        brands: normalizedBrands,
+        volumeLitres: volumeFromState,
+        sortBy: sortByValue,
+        sortOrder: sortOrderValue,
+      },
       searchParams: filter,
     };
-    initialPersisted.current = persistedState;
+
     setHasFilterChanges(false);
     setHasPendingVolumeChange(!volumeEquals(volumeInput, volumeFromState));
     return true;
@@ -272,17 +259,17 @@ export const NearbyPage: React.FC = () => {
 
   const handleSearchButtonClick = () => {
     if (!hasFilterChanges) {
-      message.info("Apply filter changes to search again.");
-      return;
+      // still allow search
+      console.info("No changes to apply; searching with current filters.");
     }
     performSearch();
   };
 
-  const syncPersistedVolume = (volume: number | undefined, nextFilter?: NearbyFilter | null) => {
-    if (!persistedState) {
-      return;
-    }
-
+  const syncPersistedVolume = (
+    volume: number | undefined,
+    nextFilter?: NearbyFilter | null
+  ) => {
+    if (!persistedState) return;
     const nextFormValues = { ...persistedState.formValues, volumeLitres: volume };
     const nextSearchParams =
       nextFilter !== undefined
@@ -290,53 +277,41 @@ export const NearbyPage: React.FC = () => {
         : persistedState.searchParams
         ? { ...persistedState.searchParams, volumeLitres: volume }
         : null;
-
     persistedState = {
       mode: persistedState.mode,
       formValues: nextFormValues,
       searchParams: nextSearchParams,
     };
-    initialPersisted.current = persistedState;
-  };
-
-  const handleOpenCostCalculation = () => {
-    setCostCalcExpanded(true);
-    setVolumeInput(appliedVolume);
-    setHasPendingVolumeChange(false);
   };
 
   const performApplyVolume = (): boolean => {
     if (volumeInput == null || Number.isNaN(volumeInput) || volumeInput <= 0) {
-      message.warning("Enter a volume in litres greater than zero.");
+      console.warn("Enter a volume in litres greater than zero.");
       return false;
     }
+    const normalized = Number(volumeInput);
+    setAppliedVolume(normalized);
+    setFormVals((prev) => ({ ...prev, volumeLitres: normalized }));
 
-    const normalizedVolume = Number(volumeInput);
-    setAppliedVolume(normalizedVolume);
-    applyFormValues({ volumeLitres: normalizedVolume });
     let hadActiveSearch = false;
     setSearchParams((prev) => {
       if (!prev) {
-        syncPersistedVolume(normalizedVolume);
+        syncPersistedVolume(normalized);
         return prev;
       }
       hadActiveSearch = true;
-      const updated = { ...prev, volumeLitres: normalizedVolume };
-      syncPersistedVolume(normalizedVolume, updated);
+      const updated = { ...prev, volumeLitres: normalized };
+      syncPersistedVolume(normalized, updated);
       return updated;
     });
-    if (hadActiveSearch) {
-      setHasFilterChanges(false);
-    } else {
-      setHasFilterChanges(true);
-    }
+    setHasFilterChanges(!hadActiveSearch);
     setHasPendingVolumeChange(false);
     return true;
   };
 
   const handleApplyVolumeClick = () => {
     if (!hasPendingVolumeChange) {
-      message.info("Adjust volume before applying again.");
+      console.info("Adjust volume before applying again.");
       return;
     }
     performApplyVolume();
@@ -346,7 +321,8 @@ export const NearbyPage: React.FC = () => {
     setAppliedVolume(undefined);
     setVolumeInput(undefined);
     setCostCalcExpanded(false);
-    applyFormValues({ volumeLitres: undefined });
+    setFormVals((prev) => ({ ...prev, volumeLitres: undefined }));
+
     let hadActiveSearch = false;
     setSearchParams((prev) => {
       if (!prev) {
@@ -358,100 +334,43 @@ export const NearbyPage: React.FC = () => {
       syncPersistedVolume(undefined, updated);
       return updated;
     });
-    if (hadActiveSearch) {
-      setHasFilterChanges(false);
-    } else {
-      setHasFilterChanges(true);
-    }
+    setHasFilterChanges(!hadActiveSearch);
     setHasPendingVolumeChange(false);
   };
 
-  const renderModeSpecificInputs = () => {
-    if (mode === "location") {
-      return (
-        <Space size="large" align="end" wrap style={{ width: "100%" }}>
-          <Form.Item
-            name="latitude"
-            label="Latitude"
-            rules={[{ required: true, message: "Latitude is required." }]}
-          >
-            <InputNumber style={{ width: 160 }} step={0.0001} />
-          </Form.Item>
-          <Form.Item
-            name="longitude"
-            label="Longitude"
-            rules={[{ required: true, message: "Longitude is required." }]}
-          >
-            <InputNumber style={{ width: 160 }} step={0.0001} />
-          </Form.Item>
-          <Form.Item label=" " colon={false} style={{ marginRight: 24 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <Button
-                onClick={handleLocate}
-                loading={geolocating}
-                disabled={!geolocationSupported}
-                style={{ alignSelf: "flex-start" }}
-              >
-                Use My Current Location
-              </Button>
-              {!geolocationSupported && (
-                <Typography.Text type="secondary">Geolocation not available in this browser.</Typography.Text>
-              )}
-            </div>
-          </Form.Item>
-        </Space>
-      );
-    }
-
-    if (mode === "suburb") {
-      return (
-        <Space size="large" wrap style={{ width: "100%" }}>
-          <Form.Item
-            name="suburb"
-            label="Suburb"
-            rules={[{ required: true, message: "Please enter a suburb." }]}
-          >
-            <Input placeholder="Enter suburb to search" style={{ width: 240 }} />
-          </Form.Item>
-        </Space>
-      );
-    }
-
-    return null;
-  };
-
-  const filtersConfigured = Boolean(searchParams);
   const currentSortBy =
     (searchParams?.sortBy as FormValues["sortBy"]) ??
-    ((form.getFieldValue("sortBy") as FormValues["sortBy"]) ?? "distance");
+    (formVals.sortBy ?? "distance");
   const currentSortOrder =
     (searchParams?.sortOrder as FormValues["sortOrder"]) ??
-    ((form.getFieldValue("sortOrder") as FormValues["sortOrder"]) ?? "asc");
+    (formVals.sortOrder ?? "asc");
 
   const applySortPersistence = (
     nextSortBy: FormValues["sortBy"],
     nextSortOrder: FormValues["sortOrder"],
     nextFilter: NearbyFilter
   ) => {
-    applyFormValues({ sortBy: nextSortBy, sortOrder: nextSortOrder });
-    const updatedFormValues = form.getFieldsValue() as FormValues;
+    setFormVals((prev) => ({ ...prev, sortBy: nextSortBy, sortOrder: nextSortOrder }));
     const derivedMode: Exclude<SearchMode, null> =
       mode ??
-      (nextFilter.latitude != null && nextFilter.longitude != null ? "location" : "suburb");
+      (nextFilter.latitude != null && nextFilter.longitude != null
+        ? "location"
+        : "suburb");
+
     persistedState = {
       mode: derivedMode,
-      formValues: updatedFormValues,
+      formValues: { ...formVals, sortBy: nextSortBy, sortOrder: nextSortOrder },
       searchParams: nextFilter,
     };
-    initialPersisted.current = persistedState;
     setHasFilterChanges(false);
   };
 
-  const handleTableSort = (sortBy: "distance" | "price", sortOrder: "asc" | "desc") => {
+  const handleTableSort = (
+    sortBy: "distance" | "price",
+    sortOrder: "asc" | "desc"
+  ) => {
     setSearchParams((prev) => {
-      if (!prev) {
-        return prev;
-      }
+      if (!prev) return prev;
       if (prev.sortBy === sortBy && prev.sortOrder === sortOrder) {
         applySortPersistence(sortBy, sortOrder, prev);
         return prev;
@@ -462,123 +381,79 @@ export const NearbyPage: React.FC = () => {
     });
   };
 
+  // ---------- UI ----------
   return (
-    <Space direction="vertical" size={24} style={{ width: "100%" }}>
-      <Typography.Title level={2}>Find Nearby Stations</Typography.Title>
+    <Stack spacing={2} sx={{ width: "100%" }}>
+      <Typography variant="h5" fontWeight={700}>
+        Find Nearby Stations
+      </Typography>
 
-      <Space size="large">
+      {/* Mode selector */}
+      <Stack direction="row" spacing={1}>
         <Button
-          type={mode === "location" ? "primary" : "default"}
+          variant={mode === "location" ? "contained" : "outlined"}
           onClick={() => handleModeSelect("location")}
+          startIcon={<SearchIcon />}
         >
-          Search By Current Location
+          Search by Location
         </Button>
         <Button
-          type={mode === "suburb" ? "primary" : "default"}
+          variant={mode === "suburb" ? "contained" : "outlined"}
           onClick={() => handleModeSelect("suburb")}
+          startIcon={<SearchIcon />}
         >
-          Search By Suburb
+          Search by Suburb
         </Button>
-      </Space>
+      </Stack>
 
+      {/* Filters */}
       {mode && (
-        <Card>
-          <Form<FormValues>
-            form={form}
-            layout="vertical"
-            onValuesChange={handleFormValuesChange}
-          >
-            {renderModeSpecificInputs()}
+        <SearchFiltersCard
+          mode={mode}
+          // values
+          latitude={formVals.latitude}
+          longitude={formVals.longitude}
+          suburb={formVals.suburb}
+          radiusKm={formVals.radiusKm}
+          fuelTypes={formVals.fuelTypes ?? []}
+          brandNames={(formVals.brands ?? []) as string[]}
+          sortBy={formVals.sortBy ?? "distance"}
+          sortOrder={formVals.sortOrder ?? "asc"}
+          volumeLitres={formVals.volumeLitres}
+          // options
+          fuelTypeOptions={fuelTypeOptions}
+          brandOptions={brandOptions}
+          // location helpers
+          geolocating={geolocating}
+          geolocationSupported={geolocationSupported}
+          // events
+          onChange={(p) => {
+            setFormVals((prev) => ({ ...prev, ...p }));
+            setHasFilterChanges(true);
 
-            <Space size="large" wrap style={{ marginTop: 16 }}>
-              <Form.Item name="radiusKm" label="Fuel Stations Within (km)">
-                <InputNumber min={1} max={50} style={{ width: 160 }} />
-              </Form.Item>
-              <Form.Item name="fuelTypes" label="Fuel Types">
-                <Select
-                  mode="multiple"
-                  allowClear
-                  options={fuelTypeOptions}
-                  placeholder="All"
-                  style={{ minWidth: 200 }}
-                />
-              </Form.Item>
-              <Form.Item name="brands" label="Brand">
-                <Select
-                  mode="tags"
-                  allowClear
-                  options={brandOptions}
-                  placeholder="All"
-                  style={{ minWidth: 200 }}
-                  tokenSeparators={[","]}
-                />
-              </Form.Item>
-              <Form.Item name="sortBy" label="Sort By">
-                <Select
-                  options={[
-                    { label: "Distance", value: "distance" },
-                    { label: "Price", value: "price" },
-                  ]}
-                  style={{ width: 160 }}
-                />
-              </Form.Item>
-              <Form.Item name="sortOrder" label="Order By">
-                <Select
-                  options={[
-                    { label: "Ascending", value: "asc" },
-                    { label: "Descending", value: "desc" },
-                  ]}
-                  style={{ width: 160 }}
-                />
-              </Form.Item>
-            </Space>
-
-            <Form.Item style={{ marginTop: 16 }}>
-              <Space size="middle" wrap>
-                {costCalcExpanded ? (
-                  <Space size="small">
-                    <InputNumber
-                      value={volumeInput}
-                      onChange={handleVolumeInputChange}
-                      placeholder="Volume charging (L)"
-                      min={0}
-                      style={{ width: 200 }}
-                    />
-                    <Button
-                      type={hasPendingVolumeChange ? "primary" : "default"}
-                      onClick={handleApplyVolumeClick}
-                    >
-                      Apply
-                    </Button>
-                    <Button onClick={handleClearVolume}>Clear</Button>
-                  </Space>
-                ) : (
-                  <Button onClick={handleOpenCostCalculation}>
-                    {appliedVolume ? `Cost Calculation (${appliedVolume} L)` : "Cost Calculation"}
-                  </Button>
-                )}
-                <Button
-                  type={hasFilterChanges ? "primary" : "default"}
-                  onClick={handleSearchButtonClick}
-                  loading={isLoading}
-                  disabled={geolocating}
-                >
-                  Search
-                </Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        </Card>
+            if (Object.prototype.hasOwnProperty.call(p, "volumeLitres")) {
+              const next = p.volumeLitres as number | undefined;
+              setVolumeInput(next);
+              setHasPendingVolumeChange(!volumeEquals(next, appliedVolume));
+            }
+          }}
+          onLocate={handleLocate}
+          onSearch={handleSearchButtonClick}
+          isSearching={isLoading}
+          hasFilterChanges={hasFilterChanges}
+          onApplyVolume={handleApplyVolumeClick}
+          onClearVolume={handleClearVolume}
+          hasPendingVolumeChange={hasPendingVolumeChange}
+        />
       )}
 
+      {/* Results */}
       {isError ? (
-        <Result
-          status="error"
-          title="Failed to load stations"
-          subTitle="Please check your inputs and try again."
-        />
-      ) : filtersConfigured ? (
-        <StationsTable
+        <Alert severity="error">
+          Failed to load stations. Please check your inputs and try again.
+        </Alert>
+      ) : searchParams ? (
+        <StationsDataGrid
           data={stations}
           loading={isLoading}
           sortBy={currentSortBy}
@@ -587,16 +462,32 @@ export const NearbyPage: React.FC = () => {
           onSortChange={handleTableSort}
         />
       ) : (
-        <Result
-          status="info"
-          title={mode ? "Configure your filters" : "Choose how you want to search"}
-          subTitle={
-            mode
-              ? "Adjust the filters above and click Search to see nearby stations."
-              : "Select Search By Current Location or Search By Suburb to get started."
-          }
-        />
+        <Card>
+          <CardContent sx={{ textAlign: "center", py: 6 }}>
+            {isLoading ? (
+              <>
+                <CircularProgress />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                  Loading...
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Typography variant="h6" gutterBottom>
+                  {mode ? "Configure your filters" : "Choose how you want to search"}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {mode
+                    ? "Adjust the filters above and click Search to see nearby stations."
+                    : "Select Search by Current Location or Search by Suburb to get started."}
+                </Typography>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
-    </Space>
+    </Stack>
   );
 };
+
+export default NearbyPage;

@@ -1,91 +1,131 @@
-import { useMemo, useState } from "react";
-import { Layout, Menu, Typography, Button, Space, message } from "antd";
-import { DashboardOutlined, EnvironmentOutlined, LoginOutlined, LogoutOutlined } from "@ant-design/icons";
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { AuthModal } from "../components/AuthModal";
-import type { AuthTokenResponse } from "../api/auth";
+// src/layouts/AppLayout.tsx
+import { useEffect, useState } from "react";
+import {
+  AppBar,
+  Box,
+  CssBaseline,
+  Divider,
+  Drawer,
+  IconButton,
+  List,
+  ListItemButton,
+  ListItemText,
+  Toolbar,
+  Typography,
+  useMediaQuery,
+} from "@mui/material";
+import MenuIcon from "@mui/icons-material/Menu";
+import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
+import { useTheme } from "@mui/material/styles";
 
-const { Header, Content, Footer, Sider } = Layout;
+const drawerWidth = 240;
 
-const menuItems = [
-  {
-    key: "overview",
-    icon: <DashboardOutlined />,
-    label: <Link to="/">Overview</Link>,
-    path: "/",
-  },
-  {
-    key: "nearby",
-    icon: <EnvironmentOutlined />,
-    label: <Link to="/nearby">Find Stations</Link>,
-    path: "/nearby",
-  },
+const nav = [
+  { text: "Overview", to: "/overview" },
+  { text: "Advance Search", to: "/nearby" },
 ];
 
-export const AppLayout: React.FC = () => {
-  const location = useLocation();
-  const { isAuthenticated, setSession, logout } = useAuth();
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+export default function AppLayout() {
+  const theme = useTheme();
+  const desktopUp = useMediaQuery(theme.breakpoints.up("lg"));
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const { pathname } = useLocation();
 
-  const selectedKeys = useMemo(() => {
-    const match = menuItems.find((item) => {
-      if (item.path === "/nearby") {
-        return location.pathname.startsWith("/nearby");
-      }
-      return location.pathname === item.path;
-    });
-    return match ? [match.key] : [menuItems[0].key];
-  }, [location.pathname]);
+  useEffect(() => {
+    if (desktopUp && mobileOpen) setMobileOpen(false);
+  }, [desktopUp, mobileOpen]);
 
-  const handleLogout = async () => {
-    await logout();
-    message.info({ key: "auth-message", content: "Signed out." });
-  };
-
-  const handleLoginSuccess = (tokens: AuthTokenResponse) => {
-    setSession(tokens);
-    setAuthModalOpen(false);
-    message.success({ key: "auth-message", content: "Signed in successfully." });
-  };
+  const drawer = (
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <Toolbar />
+      <Divider />
+      <List component="nav" sx={{ px: 1 }}>
+        {nav.map((item) => (
+          <ListItemButton
+            key={item.to}
+            component={RouterLink}
+            to={item.to}
+            selected={pathname.startsWith(item.to)}
+            onClick={() => !desktopUp && setMobileOpen(false)}
+          >
+            <ListItemText primary={item.text} />
+          </ListItemButton>
+        ))}
+      </List>
+      <Box sx={{ flexGrow: 1 }} />
+    </Box>
+  );
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth="0">
-        <div className="logo" style={{ padding: "16px", textAlign: "center" }}>
-          <Typography.Title level={4} style={{ color: "white", margin: 0 }}>
-            Pannels
-          </Typography.Title>
-        </div>
-        <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} items={menuItems} />
-      </Sider>
-      <Layout>
-        <Header style={{ background: "#fff", padding: "0 24px" }}>
-          <Space style={{ width: "100%", justifyContent: "space-between" }}>
-            <Typography.Title level={3} style={{ margin: 0 }}>
-              NSW Fuel Finder
-            </Typography.Title>
-            <div>
-              {isAuthenticated ? (
-                <Button icon={<LogoutOutlined />} onClick={handleLogout}>
-                  Log Out
-                </Button>
-              ) : (
-                <Button type="primary" icon={<LoginOutlined />} onClick={() => setAuthModalOpen(true)}>
-                  Log In / Register
-                </Button>
-              )}
-            </div>
-          </Space>
-        </Header>
-        <Content style={{ margin: "24px" }}>
-          <Outlet />
-        </Content>
-        <Footer style={{ textAlign: "center" }}>
-          NSW Fuel Finder © {new Date().getFullYear()} · Built with React & Ant Design
-        </Footer>
-      </Layout>
-      <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoginSuccess={handleLoginSuccess} />
-    </Layout>
+    <Box
+      sx={{
+        display: { xs: "block", lg: "grid" },
+        gridTemplateColumns: { lg: `${drawerWidth}px 1fr` },
+        minHeight: "100vh",
+      }}
+    >
+      <CssBaseline />
+
+      <AppBar position="fixed" sx={{ zIndex: (t) => t.zIndex.drawer + 1 }}>
+        <Toolbar>
+          {!desktopUp && (
+            <IconButton
+              edge="start"
+              color="inherit"
+              onClick={() => setMobileOpen(true)}
+              sx={{ mr: 1 }}
+              aria-label="open navigation"
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
+          <Typography variant="h6" noWrap component="div">
+            NSW Fuel Finder
+          </Typography>
+        </Toolbar>
+      </AppBar>
+
+      <Box sx={{ gridColumn: { lg: 1 }, display: { xs: "none", lg: "block" } }}>
+        {desktopUp && (
+          <Drawer
+            variant="permanent"
+            open
+            sx={{
+              "& .MuiDrawer-paper": {
+                width: drawerWidth,
+                boxSizing: "border-box",
+              },
+            }}
+          >
+            {drawer}
+          </Drawer>
+        )}
+      </Box>
+
+      {!desktopUp && (
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{ "& .MuiDrawer-paper": { width: drawerWidth } }}
+        >
+          {drawer}
+        </Drawer>
+      )}
+
+    
+      <Box
+        component="main"
+        sx={{
+          gridColumn: { lg: 2 },
+          px: { xs: 2, sm: 3, lg: 4 }, 
+          pb: 4,
+        }}
+      >
+        +  <Toolbar />
+        <Outlet />
+      </Box>
+    </Box>
   );
-};
+}

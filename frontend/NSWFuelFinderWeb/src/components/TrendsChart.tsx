@@ -1,49 +1,157 @@
-import { Card } from "antd";
-import { Line } from "@ant-design/plots";
+import * as React from "react";
+import { Card, CardContent, Stack, Typography, Box, Alert, CircularProgress } from "@mui/material";
+import { LineChart } from "@mui/x-charts/LineChart";
 import dayjs from "dayjs";
-import type { FuelPriceTrendResponse } from "../types";
+import { getFuelColor } from "../utils/fuelColors";
 
-type Props = {
+// Flexible record shape
+type AnyRecord = Record<string, any>;
+
+export interface TrendsChartProps {
   loading?: boolean;
-  data?: FuelPriceTrendResponse[];
-};
+  data?: AnyRecord[] | null;
+  title?: string;
+  height?: number;
+}
 
-export const TrendsChart: React.FC<Props> = ({ loading, data }) => {
-  if (loading) {
-    return <Card loading style={{ height: 320 }} />;
+// Convert cents-per-litre to $/L text
+function formatDollarPerL(valueCents: number | null | undefined) {
+  if (valueCents == null) return "—";
+  return `$${(valueCents / 100).toFixed(3)}/L`;
+}
+
+// Extract date from common keys
+function getDate(rec: AnyRecord): Date | null {
+  const keys = ["timestamp", "ts", "date", "observedAt", "lastUpdated"];
+  for (const k of keys) {
+    const v = rec[k];
+    if (v == null) continue;
+    if (v instanceof Date) return v;
+    if (typeof v === "number") return new Date(v < 2e11 ? v * 1000 : v);
+    if (typeof v === "string") {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+// Extract cents-per-litre from common keys
+function getCents(rec: AnyRecord): number | null {
+  const keys = ["centsPerLitre", "priceCpl", "price", "value"];
+  for (const k of keys) {
+    const v = rec[k];
+    if (v == null) continue;
+    const num = typeof v === "string" ? Number(v) : (v as number);
+    if (!Number.isNaN(num)) return num;
+  }
+  return null;
+}
+
+// Optional grouping key
+function getFuelType(rec: AnyRecord): string | undefined {
+  return rec.fuelType ?? rec.fuel ?? rec.type ?? undefined;
+}
+
+/**
+ * Normalize raw trend points into dataset rows for MUI X Charts:
+ *   dataset: [{ x: Date, "<labelA>": number|null, "<labelB>": number|null, ... }]
+ *   labels:  ["<labelA>", "<labelB>", ...]
+ */
+function toDataset(raw?: AnyRecord[] | null) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { dataset: [] as Array<Record<string, Date | number | null>>, labels: [] as string[] };
   }
 
-  if (!data || data.length === 0) {
-    return <Card>No trend data available for this station.</Card>;
+  const points: { x: Date; y: number; label: string }[] = [];
+  for (const r of raw) {
+    const x = getDate(r);
+    const y = getCents(r);
+    if (!x || y == null) continue;
+    const label = getFuelType(r) ?? "Price";
+    points.push({ x, y, label });
   }
+  points.sort((a, b) => a.x.getTime() - b.x.getTime());
 
-  const merged = data.flatMap((series) =>
-    series.points.map((point) => ({
-      fuelType: series.fuelType,
-      date: dayjs(point.recordedAt).format("YYYY-MM-DD"),
-      price: point.centsPerLitre / 100,
-    }))
-  );
+  if (points.length === 0) return { dataset: [], labels: [] as string[] };
 
-  const config = {
-    data: merged,
-    xField: "date",
-    yField: "price",
-    seriesField: "fuelType",
-    smooth: true,
-    height: 320,
-    meta: {
-      date: { alias: "Date" },
-      price: { alias: "Price ($/L)" },
-    },
-    tooltip: {
-      showMarkers: false,
-    },
-  } as const;
+  const timeKeys = Array.from(new Set(points.map((p) => p.x.getTime()))).sort((a, b) => a - b);
+  const labels = Array.from(new Set(points.map((p) => p.label)));
+
+  const dataset: Array<Record<string, Date | number | null>> = timeKeys.map((t) => {
+    const row: Record<string, Date | number | null> = { x: new Date(t) };
+    for (const lab of labels) row[lab] = null;
+    for (const p of points) {
+      if (p.x.getTime() === t) row[p.label] = p.y;
+    }
+    return row;
+  });
+
+  return { dataset, labels };
+}
+
+export const TrendsChart: React.FC<TrendsChartProps> = ({
+  loading,
+  data,
+  title = "Price trends",
+  height = 360,
+}) => {
+  const { dataset, labels } = React.useMemo(() => toDataset(data), [data]);
+  const isEmpty = !loading && dataset.length === 0;
 
   return (
-    <Card title="Price Trend">
-      <Line {...config} />
+    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography variant="h5" component="h2">
+            {title}
+          </Typography>
+
+          {loading && (
+            <Box sx={{ height, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <CircularProgress />
+            </Box>
+          )}
+
+          {isEmpty && <Alert severity="info">No trend data available for the current selection.</Alert>}
+
+          {!loading && !isEmpty && (
+            <LineChart
+              height={height}
+              dataset={dataset}
+              xAxis={[
+                {
+                  scaleType: "time",
+                  dataKey: "x",
+                  label: "Date",
+                  valueFormatter: (v: unknown) => dayjs(v as Date).format("MMM D"),
+                },
+              ]}
+              series={labels.map((lab) => ({
+                id: lab,
+                label: lab,
+                dataKey: lab,
+                color: getFuelColor(lab), // use your existing color map
+                valueFormatter: (v: number | null) =>
+                  typeof v === "number" ? `${v.toFixed(1)}¢/L (${formatDollarPerL(v)})` : "",
+              }))}
+              yAxis={[
+                {
+                  label: "¢/L",
+                  valueFormatter: (v: number | null) =>
+                    typeof v === "number" ? `${v.toFixed(1)}¢/L` : "",
+                },
+              ]}
+              sx={{
+                "& .MuiChartsAxis-label": { fill: "text.secondary" },
+                "& .MuiChartsLegend-series": { fontSize: 12 },
+              }}
+            />
+          )}
+        </Stack>
+      </CardContent>
     </Card>
   );
 };
+
+export default TrendsChart;
