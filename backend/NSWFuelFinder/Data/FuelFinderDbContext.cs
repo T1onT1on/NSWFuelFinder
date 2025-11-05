@@ -21,6 +21,8 @@ public sealed class FuelFinderDbContext : IdentityDbContext<IdentityUser>
 
     public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
 
+    public DbSet<RepresentativeCoordinateEntity> RepresentativeCoordinates => Set<RepresentativeCoordinateEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -106,6 +108,17 @@ public sealed class FuelFinderDbContext : IdentityDbContext<IdentityUser>
             entity.Property(t => t.CreatedByIp).HasMaxLength(64);
             entity.Property(t => t.RevokedByIp).HasMaxLength(64);
             entity.HasIndex(t => t.UserId);
+        });
+
+        modelBuilder.Entity<RepresentativeCoordinateEntity>(entity =>
+        {
+            entity.ToTable("RepresentativeCoordinates");
+            entity.HasKey(c => c.Postcode);
+            entity.Property(c => c.Postcode).HasMaxLength(16);
+            entity.Property(c => c.Latitude).HasPrecision(9, 6);
+            entity.Property(c => c.Longitude).HasPrecision(9, 6);
+            entity.Property(c => c.Label).HasMaxLength(256);
+            entity.Property(c => c.Manual).HasDefaultValue(false);
         });
     }
 }

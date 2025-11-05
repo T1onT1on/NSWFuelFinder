@@ -30,6 +30,7 @@ export type NearbyStationsResponse = {
   count: number;
   availableBrands?: string[];
   stations: NearbyFuelStation[];
+  message?: string | null;
 };
 
 export type CheapestPriceResponse = {

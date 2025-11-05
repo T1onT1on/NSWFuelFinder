@@ -8,6 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="DatabaseHelper\**" />
+    <Content Remove="DatabaseHelper\**" />
+    <EmbeddedResource Remove="DatabaseHelper\**" />
+    <None Remove="DatabaseHelper\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.20" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.8">
@@ -20,5 +27,4 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="8.0.20" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
-
 </Project>

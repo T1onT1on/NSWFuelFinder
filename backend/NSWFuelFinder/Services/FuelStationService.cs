@@ -26,6 +26,7 @@ public sealed class FuelStationService : IFuelStationService
 {
     private readonly FuelFinderDbContext _dbContext;
     private readonly ILogger<FuelStationService> _logger;
+    private readonly ISuburbCoordinateResolver _coordinateResolver;
     private static readonly string[] DefaultAllowedFuelTypes =
     [
         "E10",
@@ -41,10 +42,12 @@ public sealed class FuelStationService : IFuelStationService
     public FuelStationService(
         FuelFinderDbContext dbContext,
         ILogger<FuelStationService> logger,
-        IOptions<FuelDisplayOptions> displayOptions)
+        IOptions<FuelDisplayOptions> displayOptions,
+        ISuburbCoordinateResolver coordinateResolver)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _coordinateResolver = coordinateResolver;
         var configuredFuelTypes = displayOptions.Value?.AllowedFuelTypes;
         var fuels = (configuredFuelTypes is { Length: > 0 } ? configuredFuelTypes : DefaultAllowedFuelTypes)
             .Where(f => !string.IsNullOrWhiteSpace(f))
@@ -68,7 +71,10 @@ public sealed class FuelStationService : IFuelStationService
         var normalizedFuelTypes = NormalizeFuelTypes(fuelTypes, _allowedFuelTypes);
         var normalizedBrands = NormalizeBrands(brands);
         var radius = Math.Max(radiusKm, 0);
-        var hasReferencePoint = latitude.HasValue && longitude.HasValue;
+
+        double? effectiveLatitude = latitude;
+        double? effectiveLongitude = longitude;
+        string? message = null;
 
         var query = _dbContext.Stations
             .AsNoTracking()
@@ -77,13 +83,33 @@ public sealed class FuelStationService : IFuelStationService
 
         if (!string.IsNullOrWhiteSpace(suburb))
         {
-            var normalizedSuburb = suburb.Trim();
-            var likePattern = $"%{normalizedSuburb}%";
+            var coordinate = await _coordinateResolver.ResolveAsync(suburb, cancellationToken).ConfigureAwait(false);
+            if (coordinate is null)
+            {
+                message = $"Stations within suburb/postcode '{suburb}' not found!";
+                return new NearbyStationsResult(Array.Empty<NearbyFuelStation>(), Array.Empty<string>(), message);
+            }
 
-            query = query.Where(s => s.Suburb != null &&
-                                     EF.Functions.ILike(s.Suburb!, likePattern));
+            effectiveLatitude = coordinate.Latitude;
+            effectiveLongitude = coordinate.Longitude;
+            latitude = effectiveLatitude;
+            longitude = effectiveLongitude;
 
-            _logger.LogInformation("Filtering stations by suburb '{Suburb}'.", normalizedSuburb);
+            _logger.LogInformation("Resolved suburb/postcode '{Suburb}' to representative coordinate ({Latitude}, {Longitude}).", suburb, effectiveLatitude, effectiveLongitude);
+        }
+
+        var hasReferencePoint = effectiveLatitude.HasValue && effectiveLongitude.HasValue;
+
+        if (hasReferencePoint)
+        {
+            var latValue = effectiveLatitude!.Value;
+            var lonValue = effectiveLongitude!.Value;
+            var latDelta = radius / 111d;
+            var lonDelta = radius / (Math.Max(Math.Cos(latValue * Math.PI / 180d), 0.00001d) * 111d);
+
+            query = query.Where(s =>
+                Math.Abs(s.Latitude - latValue) <= latDelta &&
+                Math.Abs(s.Longitude - lonValue) <= lonDelta);
         }
 
         var stations = await query.ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -119,15 +145,23 @@ public sealed class FuelStationService : IFuelStationService
 
         if (!string.IsNullOrWhiteSpace(suburb))
         {
-            _logger.LogInformation("Found {Count} stations matching suburb filter '{Suburb}'.", stations.Count, suburb);
+            _logger.LogInformation("Found {Count} stations matching suburb/postcode filter '{Suburb}'.", stations.Count, suburb);
         }
         if (stations.Count == 0)
         {
-            _logger.LogWarning("No fuel station data available in the local cache. Ensure the sync service has run successfully.");
-            return new NearbyStationsResult(Array.Empty<NearbyFuelStation>(), availableBrands);
+            if (string.IsNullOrWhiteSpace(message) && !string.IsNullOrWhiteSpace(suburb))
+            {
+                message = $"Stations within suburb/postcode '{suburb}' not found!";
+            }
+
+            _logger.LogWarning("No fuel station data matched the current filters.");
+            return new NearbyStationsResult(Array.Empty<NearbyFuelStation>(), availableBrands, message);
         }
 
         var results = new List<NearbyFuelStation>(stations.Count);
+
+        var referenceLatitude = effectiveLatitude;
+        var referenceLongitude = effectiveLongitude;
 
         foreach (var station in stations)
         {
@@ -140,7 +174,7 @@ public sealed class FuelStationService : IFuelStationService
 
             if (hasReferencePoint)
             {
-                distanceKm = CalculateDistance(latitude!.Value, longitude!.Value, station.Latitude, station.Longitude);
+                distanceKm = CalculateDistance(referenceLatitude!.Value, referenceLongitude!.Value, station.Latitude, station.Longitude);
                 if (distanceKm > radius)
                 {
                     continue;
@@ -157,7 +191,12 @@ public sealed class FuelStationService : IFuelStationService
         }
 
         var sortedResults = SortResults(results, sortBy, sortOrder);
-        return new NearbyStationsResult(sortedResults, availableBrands);
+        if (sortedResults.Count == 0 && string.IsNullOrWhiteSpace(message) && !string.IsNullOrWhiteSpace(suburb))
+        {
+            message = $"Stations within suburb/postcode '{suburb}' not found!";
+        }
+
+        return new NearbyStationsResult(sortedResults, availableBrands, message);
     }
 
     private static IReadOnlyCollection<string> NormalizeFuelTypes(

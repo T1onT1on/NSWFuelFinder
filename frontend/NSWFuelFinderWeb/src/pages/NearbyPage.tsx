@@ -548,14 +548,21 @@ export const NearbyPage: React.FC = () => {
           Failed to load stations. Please check your inputs and try again.
         </Alert>
       ) : searchParams ? (
-        <StationsDataGrid
-          data={stations}
-          loading={isLoading}
-          sortBy={currentSortBy}
-          sortOrder={currentSortOrder}
-          appliedVolume={appliedVolume}
-          onSortChange={handleTableSort}
-        />
+        <>
+          {data?.message && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {data.message}
+            </Alert>
+          )}
+          <StationsDataGrid
+            data={stations}
+            loading={isLoading}
+            sortBy={currentSortBy}
+            sortOrder={currentSortOrder}
+            appliedVolume={appliedVolume}
+            onSortChange={handleTableSort}
+          />
+        </>
       ) : (
         <Card>
           <CardContent sx={{ textAlign: "center", py: 6 }}>

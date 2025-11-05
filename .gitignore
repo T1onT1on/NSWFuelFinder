@@ -13,6 +13,14 @@ obj/
 *.cache
 *.pdb
 
+#Database Helpers
+docs/
+DatabaseHelper/
+Deployment.md
+*.ps1
+
+
+
 # sqlite
 *.db
 *.db-shm

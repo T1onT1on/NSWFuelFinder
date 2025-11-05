@@ -55,15 +55,40 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.AddMemoryCache();
 builder.Services.AddDbContext<FuelFinderDbContext>(options =>
 {
-    var connectionString =
-        builder.Configuration.GetConnectionString("FuelFinder")
-        ?? builder.Configuration["Database:ConnectionString"]
-        ?? builder.Configuration["FUELFINDER_DB_CONNECTION"];
+    var configuration = builder.Configuration;
+    var environment = builder.Environment;
+
+    var overrideConnection =
+        configuration["FUELFINDER_DB_CONNECTION"]
+        ?? configuration["ConnectionStrings:FuelFinderOverride"];
+
+    string? connectionString = null;
+
+    if (!string.IsNullOrWhiteSpace(overrideConnection))
+    {
+        connectionString = overrideConnection;
+    }
+    else if (environment.IsDevelopment())
+    {
+        connectionString =
+            configuration["LOCAL_FUELFINDER_DB_CONNECTION"]
+            ?? configuration.GetConnectionString("FuelFinderLocal")
+            ?? configuration["ConnectionStrings:FuelFinderLocal"]
+            ?? configuration["Database:LocalConnectionString"]
+            ?? "Host=localhost;Port=5432;Database=fuelfinder;Username=postgres;Password=postgres;Include Error Detail=true";
+    }
+    else
+    {
+        connectionString =
+            configuration.GetConnectionString("FuelFinder")
+            ?? configuration["ConnectionStrings:FuelFinder"]
+            ?? configuration["Database:ConnectionString"];
+    }
 
     if (string.IsNullOrWhiteSpace(connectionString))
     {
         throw new InvalidOperationException(
-            "PostgreSQL connection string is missing. Configure ConnectionStrings:FuelFinder or FUELFINDER_DB_CONNECTION.");
+            "PostgreSQL connection string is missing. Configure FUELFINDER_DB_CONNECTION (or the appropriate ConnectionStrings entry).");
     }
 
     options.UseNpgsql(connectionString, npgsql =>
@@ -113,6 +138,7 @@ builder.Services.AddScoped<IFuelStationService, FuelStationService>();
 builder.Services.AddScoped<ITokenService, JwtTokenService>();
 builder.Services.AddHostedService<FuelDataSyncService>();
 builder.Services.AddHealthChecks();
+builder.Services.AddScoped<ISuburbCoordinateResolver, SuburbCoordinateResolver>();
 
 builder.Services.AddCors(options =>
 {
@@ -208,7 +234,8 @@ app.MapGet("/api/stations/nearby", async Task<IResult> (
         RadiusKm = radius,
         Count = stationResults.Stations.Count,
         Stations = stationResults.Stations,
-        AvailableBrands = stationResults.AvailableBrands
+        AvailableBrands = stationResults.AvailableBrands,
+        Message = stationResults.Message
     });
 })
 .WithName("GetNearbyStations")
@@ -725,6 +752,8 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+//await RepresentativeCoordinateSeeder.SeedAsync(app.Services, app.Logger);
+
 app.Run();
 
 static UserPreferencesResponse BuildUserPreferencesResponse(UserPreferenceEntity? entity)
@@ -839,6 +868,7 @@ internal sealed class NearbyStationResponse
     public int Count { get; init; }
     public IReadOnlyList<NearbyFuelStation> Stations { get; init; } = Array.Empty<NearbyFuelStation>();
     public IReadOnlyList<string> AvailableBrands { get; init; } = Array.Empty<string>();
+    public string? Message { get; init; }
 }
 
 internal sealed class CheapestPriceResponse
