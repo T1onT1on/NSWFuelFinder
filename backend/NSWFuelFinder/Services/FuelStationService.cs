@@ -81,9 +81,7 @@ public sealed class FuelStationService : IFuelStationService
             var likePattern = $"%{normalizedSuburb}%";
 
             query = query.Where(s => s.Suburb != null &&
-                                     EF.Functions.Like(
-                                         EF.Functions.Collate(s.Suburb!, "NOCASE"),
-                                         likePattern));
+                                     EF.Functions.ILike(s.Suburb!, likePattern));
 
             _logger.LogInformation("Filtering stations by suburb '{Suburb}'.", normalizedSuburb);
         }
