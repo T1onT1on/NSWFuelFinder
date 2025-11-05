@@ -115,42 +115,48 @@ public sealed class FuelDataSyncService : BackgroundService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-
-        await dbContext.Prices.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await dbContext.Stations.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-
-        var stationEntities = response.Stations
-            .Where(station => !string.IsNullOrWhiteSpace(station.Code))
-            .Select(station => MapStation(station, syncTimestamp))
-            .ToList();
-
-        await dbContext.Stations.AddRangeAsync(stationEntities, cancellationToken).ConfigureAwait(false);
-
-        var priceEntities = response.Prices
-            .Where(price => !string.IsNullOrWhiteSpace(price.StationCode) && !string.IsNullOrWhiteSpace(price.FuelType))
-            .Select(MapPrice)
-            .ToList();
-
-        await dbContext.Prices.AddRangeAsync(priceEntities, cancellationToken).ConfigureAwait(false);
-
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-        var historyEntries = priceEntities.Select(p => new FuelPriceHistoryEntity
+        var executionStrategy = dbContext.Database.CreateExecutionStrategy();
+        await executionStrategy.ExecuteAsync(async () =>
         {
-            StationCode = p.StationCode,
-            FuelType = p.FuelType,
-            Price = p.Price,
-            RecordedAtUtc = syncTimestamp
-        }).ToList();
+            dbContext.ChangeTracker.Clear();
 
-        await dbContext.PriceHistory.AddRangeAsync(historyEntries, cancellationToken).ConfigureAwait(false);
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await dbContext.Prices.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await dbContext.Stations.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.", historyEntries.Count, syncTimestamp);
+            var stationEntities = response.Stations
+                .Where(station => !string.IsNullOrWhiteSpace(station.Code))
+                .Select(station => MapStation(station, syncTimestamp))
+                .ToList();
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            await dbContext.Stations.AddRangeAsync(stationEntities, cancellationToken).ConfigureAwait(false);
+
+            var priceEntities = response.Prices
+                .Where(price => !string.IsNullOrWhiteSpace(price.StationCode) && !string.IsNullOrWhiteSpace(price.FuelType))
+                .Select(MapPrice)
+                .ToList();
+
+            await dbContext.Prices.AddRangeAsync(priceEntities, cancellationToken).ConfigureAwait(false);
+
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            var historyEntries = priceEntities.Select(p => new FuelPriceHistoryEntity
+            {
+                StationCode = p.StationCode,
+                FuelType = p.FuelType,
+                Price = p.Price,
+                RecordedAtUtc = syncTimestamp
+            }).ToList();
+
+            await dbContext.PriceHistory.AddRangeAsync(historyEntries, cancellationToken).ConfigureAwait(false);
+
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.", historyEntries.Count, syncTimestamp);
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }).ConfigureAwait(false);
     }
 
     private static FuelStationEntity MapStation(FuelStationPayload station, DateTimeOffset syncTimestamp)

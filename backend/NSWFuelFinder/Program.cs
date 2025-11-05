@@ -1,3 +1,4 @@
+using System;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -34,8 +35,21 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.AddMemoryCache();
 builder.Services.AddDbContext<FuelFinderDbContext>(options =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("FuelFinder") ?? "Data Source=fuelfinder_v2.db";
-    options.UseSqlite(connectionString);
+    var connectionString =
+        builder.Configuration.GetConnectionString("FuelFinder")
+        ?? builder.Configuration["Database:ConnectionString"]
+        ?? builder.Configuration["FUELFINDER_DB_CONNECTION"];
+
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        throw new InvalidOperationException(
+            "PostgreSQL connection string is missing. Configure ConnectionStrings:FuelFinder or FUELFINDER_DB_CONNECTION.");
+    }
+
+    options.UseNpgsql(connectionString, npgsql =>
+    {
+        npgsql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(5), errorCodesToAdd: null);
+    });
 });
 
 builder.Services

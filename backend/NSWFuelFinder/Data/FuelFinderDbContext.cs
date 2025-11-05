@@ -87,6 +87,7 @@ public sealed class FuelFinderDbContext : IdentityDbContext<IdentityUser>
             entity.ToTable("FuelPriceHistory");
             entity.HasKey(h => h.Id);
 
+            entity.Property(h => h.Id).ValueGeneratedOnAdd();
             entity.Property(h => h.StationCode).HasMaxLength(32);
             entity.Property(h => h.FuelType).HasMaxLength(16);
             entity.Property(h => h.Price).HasPrecision(8, 1);
@@ -99,6 +100,7 @@ public sealed class FuelFinderDbContext : IdentityDbContext<IdentityUser>
         {
             entity.ToTable("RefreshTokens");
             entity.HasKey(t => t.Id);
+            entity.Property(t => t.Id).ValueGeneratedOnAdd();
             entity.Property(t => t.TokenHash).HasMaxLength(256);
             entity.Property(t => t.TokenSalt).HasMaxLength(128);
             entity.Property(t => t.CreatedByIp).HasMaxLength(64);

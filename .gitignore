@@ -24,6 +24,8 @@ dist/
 
 # misc
 .env
+.env.local
+.env.*.local
 
 #notes
 *.txt
