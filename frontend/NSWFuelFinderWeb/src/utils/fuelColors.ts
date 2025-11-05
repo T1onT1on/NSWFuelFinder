@@ -5,12 +5,12 @@
 
 /** Mapping from fuel type → color (used for chips, charts, etc.) */
 export const fuelColorMap: Record<string, string> = {
-  E10: "#2ecc71", // green
-  U91: "#5bc0de", // blue
+  E10: "#2E7D32", // green
+  U91: "#455A64", // blue
   P95: "#303f9f", // indigo
-  P98: "#ff4d4f", // red
-  DL: "#fadb14",  // yellow
-  PDL: "#fadb14", // yellow (premium diesel)
+  P98: "#DD2C00", // red
+  DL: "#EF6C00",  // yellow
+  PDL: "#EF6C00", // yellow (premium diesel)
 };
 
 /** Display order for fuel types (used for sorting) */

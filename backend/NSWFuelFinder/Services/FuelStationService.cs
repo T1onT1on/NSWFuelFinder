@@ -91,9 +91,9 @@ public sealed class FuelStationService : IFuelStationService
         var stations = await query.ToListAsync(cancellationToken).ConfigureAwait(false);
 
         var availableBrands = stations
-            .Where(s => !string.IsNullOrWhiteSpace(s.Brand))
-            .Select(s => s.Brand!.Trim())
-            .Where(b => b.Length > 0)
+            .Select(s => BrandNormalizer.GetCanonical(s.Brand))
+            .Where(b => !string.IsNullOrWhiteSpace(b))
+            .Select(b => b!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(b => b, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -108,13 +108,13 @@ public sealed class FuelStationService : IFuelStationService
             stations = stations
                 .Where(s =>
                 {
-                    if (string.IsNullOrWhiteSpace(s.Brand))
+                    var canonical = BrandNormalizer.GetCanonical(s.Brand);
+                    if (string.IsNullOrWhiteSpace(canonical))
                     {
                         return false;
                     }
 
-                    var brandValue = s.Brand.Trim();
-                    return brandValue.Length > 0 && brandSet.Contains(brandValue);
+                    return brandSet.Contains(canonical);
                 })
                 .ToList();
         }
@@ -188,9 +188,9 @@ public sealed class FuelStationService : IFuelStationService
         }
 
         return brands
+            .Select(BrandNormalizer.GetCanonical)
             .Where(b => !string.IsNullOrWhiteSpace(b))
-            .Select(b => b.Trim())
-            .Where(b => b.Length > 0)
+            .Select(b => b!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(b => b, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -227,11 +227,16 @@ public sealed class FuelStationService : IFuelStationService
             return null;
         }
 
+        var canonicalBrand = BrandNormalizer.GetCanonical(station.Brand);
+        var displayBrand = BrandNormalizer.GetDisplay(station.Brand);
+
         return new NearbyFuelStation
         {
             Id = station.StationCode,
             Name = station.Name ?? $"Site {station.StationCode}",
-            Brand = station.Brand,
+            Brand = displayBrand,
+            BrandCanonical = canonicalBrand,
+            BrandOriginal = station.Brand?.Trim(),
             Address = station.Address,
             Suburb = station.Suburb,
             State = station.State,

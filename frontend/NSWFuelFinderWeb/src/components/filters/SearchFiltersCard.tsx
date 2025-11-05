@@ -14,6 +14,21 @@ import RestartAltIcon from "@mui/icons-material/RestartAlt";
 
 type Option = { label: string; value: string };
 
+const SIGNED_DECIMAL_REGEX = /^-?\d*(\.\d*)?$/;
+const UNSIGNED_DECIMAL_REGEX = /^\d*(\.\d*)?$/;
+
+const toInputString = (value?: number) =>
+  value === null || value === undefined || Number.isNaN(value) ? "" : String(value);
+
+const isTransientNumericInput = (value: string, allowNegative: boolean) => {
+  if (value === "") return false;
+  if (value === ".") return true;
+  if (allowNegative && (value === "-" || value === "-.")) return true;
+  return false;
+};
+
+const isParsableNumber = (value: string) => value.trim() !== "";
+
 export type SearchFiltersCardProps = {
   mode: "location" | "suburb";
 
@@ -69,32 +84,113 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const wide1024 = useMediaQuery("(min-width:1024px)");
+  const isCompactButtons = useMediaQuery("(max-width:429px)");
   const [expanded, setExpanded] = React.useState(false);
 
+  const [latitudeInput, setLatitudeInput] = React.useState(() => toInputString(latitude));
+  const [longitudeInput, setLongitudeInput] = React.useState(() => toInputString(longitude));
+  const [radiusInput, setRadiusInput] = React.useState(() => toInputString(radiusKm));
+  const [volumeInputValue, setVolumeInputValue] = React.useState(() => toInputString(volumeLitres));
+
+  React.useEffect(() => {
+    setLatitudeInput(toInputString(latitude));
+  }, [latitude]);
+
+  React.useEffect(() => {
+    setLongitudeInput(toInputString(longitude));
+  }, [longitude]);
+
+  React.useEffect(() => {
+    setRadiusInput(toInputString(radiusKm));
+  }, [radiusKm]);
+
+  React.useEffect(() => {
+    setVolumeInputValue(toInputString(volumeLitres));
+  }, [volumeLitres]);
+
+  const handleLatitudeInputChange = (raw: string) => {
+    if (!SIGNED_DECIMAL_REGEX.test(raw)) return;
+    setLatitudeInput(raw);
+    if (raw === "") {
+      onChange({ latitude: undefined });
+      return;
+    }
+    if (!isParsableNumber(raw) || isTransientNumericInput(raw, true)) {
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed)) {
+      onChange({ latitude: parsed });
+    }
+  };
+
+  const handleLongitudeInputChange = (raw: string) => {
+    if (!SIGNED_DECIMAL_REGEX.test(raw)) return;
+    setLongitudeInput(raw);
+    if (raw === "") {
+      onChange({ longitude: undefined });
+      return;
+    }
+    if (!isParsableNumber(raw) || isTransientNumericInput(raw, true)) {
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed)) {
+      onChange({ longitude: parsed });
+    }
+  };
+
+  const handleRadiusInputChange = (raw: string) => {
+    if (!UNSIGNED_DECIMAL_REGEX.test(raw)) return;
+    setRadiusInput(raw);
+    if (raw === "") {
+      onChange({ radiusKm: undefined });
+      return;
+    }
+    if (!isParsableNumber(raw) || isTransientNumericInput(raw, false)) {
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed)) {
+      onChange({ radiusKm: parsed });
+    }
+  };
+
+  const handleVolumeInputChange = (raw: string) => {
+    if (!UNSIGNED_DECIMAL_REGEX.test(raw)) return;
+    setVolumeInputValue(raw);
+    if (raw === "") {
+      onChange({ volumeLitres: undefined });
+      return;
+    }
+    if (!isParsableNumber(raw) || isTransientNumericInput(raw, false)) {
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed)) {
+      onChange({ volumeLitres: parsed });
+    }
+  };
+
   // Build brand option objects once
-  const brandOptionObjs = React.useMemo(
-    () => (brandOptions ?? []).map((s) => ({ label: s, value: s })),
-    [brandOptions]
-  );
+  const brandOptionObjs = React.useMemo(() => {
+    const desiredOrder = ["Ampol", "7-Eleven", "BP", "Shell"];
+    const options = (brandOptions ?? []).map((s) => ({ label: s, value: s }));
+    if (!options.length) return options;
+    const priority = new Map(desiredOrder.map((name, index) => [name.toUpperCase(), index]));
+    return options.slice().sort((a, b) => {
+      const aKey = priority.get(a.value.toUpperCase());
+      const bKey = priority.get(b.value.toUpperCase());
+      if (aKey != null && bKey != null) return aKey - bKey;
+      if (aKey != null) return -1;
+      if (bKey != null) return 1;
+      return a.label.localeCompare(b.label);
+    });
+  }, [brandOptions]);
 
   return (
     <Card elevation={1}>
-      <CardHeader
-        title="Search Filters"
-        action={
-          <Button
-            size="medium"
-            endIcon={
-              <ExpandMoreIcon
-                sx={{ transform: expanded ? "rotate(180deg)" : "none", transition: "0.2s" }}
-              />
-            }
-            onClick={() => setExpanded((v) => !v)}
-          >
-            {expanded ? "Hide advanced" : "Advanced filters"}
-          </Button>
-        }
-      />
+      <CardHeader title="Search Filters" />
       <Divider />
 
       {/* Basic filters */}
@@ -106,31 +202,31 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               <Grid size={{ xs: 12, md: 6 }}>
                 <TextField
                   label="Latitude"
-                  value={latitude ?? ""}
-                  onChange={(e) =>
-                    onChange({
-                      latitude: e.target.value === "" ? undefined : Number(e.target.value),
-                    })
-                  }
+                  value={latitudeInput}
+                  onChange={(e) => handleLatitudeInputChange(e.target.value)}
                   placeholder="Enter Manually or Use Location"
                   fullWidth
                   size="small"
                   variant="outlined"
+                  inputProps={{
+                    inputMode: "decimal",
+                    pattern: "-?[0-9]*\\.?[0-9]*",
+                  }}
                 />
               </Grid>
               <Grid size={{ xs: 12, md: 6 }}>
                 <TextField
                   label="Longitude"
-                  value={longitude ?? ""}
-                  onChange={(e) =>
-                    onChange({
-                      longitude: e.target.value === "" ? undefined : Number(e.target.value),
-                    })
-                  }
+                  value={longitudeInput}
+                  onChange={(e) => handleLongitudeInputChange(e.target.value)}
                   placeholder="Enter Manually or Use Location"
                   fullWidth
                   size="small"
                   variant="outlined"
+                  inputProps={{
+                    inputMode: "decimal",
+                    pattern: "-?[0-9]*\\.?[0-9]*",
+                  }}
                 />
               </Grid>
 
@@ -144,16 +240,16 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
                 >
                   <TextField
                     label="Fuel Stations Within (km)"
-                    value={radiusKm ?? ""}
-                    onChange={(e) =>
-                      onChange({
-                        radiusKm: e.target.value === "" ? undefined : Number(e.target.value),
-                      })
-                    }
+                    value={radiusInput}
+                    onChange={(e) => handleRadiusInputChange(e.target.value)}
                     placeholder="5"
                     size="small"
                     variant="outlined"
                     sx={{ width: 200, flexShrink: 0 }}
+                    inputProps={{
+                      inputMode: "decimal",
+                      pattern: "[0-9]*\\.?[0-9]*",
+                    }}
                   />
 
                   <Tooltip
@@ -197,16 +293,16 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               <Grid size={{ xs: 12, md: 4 }}>
                 <TextField
                   label="Fuel Stations Within (km)"
-                  value={radiusKm ?? ""}
-                  onChange={(e) =>
-                    onChange({
-                      radiusKm: e.target.value === "" ? undefined : Number(e.target.value),
-                    })
-                  }
+                  value={radiusInput}
+                  onChange={(e) => handleRadiusInputChange(e.target.value)}
                   placeholder="5"
                   fullWidth
                   size="small"
                   variant="outlined"
+                  inputProps={{
+                    inputMode: "decimal",
+                    pattern: "[0-9]*\\.?[0-9]*",
+                  }}
                 />
               </Grid>
             </>
@@ -215,15 +311,54 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
       </CardContent>
 
       <CardActions sx={{ px: 2, pb: expanded ? 0 : 2 }}>
-        <Stack direction="row" spacing={1}>
-          <Button
+        <Stack
+          direction={isCompactButtons ? "column" : "row"}
+          spacing={1}
+          alignItems={isCompactButtons ? "stretch" : "center"}
+          justifyContent={isCompactButtons ? "flex-start" : "center"}
+          sx={{ width: "100%" }}
+        >
+
+        <Button
             variant={hasFilterChanges ? "contained" : "outlined"}
             startIcon={<SearchIcon />}
             onClick={onSearch}
             disabled={isSearching}
+            sx={{
+              flex: isCompactButtons ? "0 0 100%" : "1 1 0%",
+              minWidth: isCompactButtons ? "100%" : 0,
+              maxWidth: isCompactButtons ? "100%" : 350,
+              height: 40,
+              px: 2.5,
+              whiteSpace: "nowrap",
+            }}
           >
             Search
           </Button>
+
+          <Button
+            size="medium"
+            variant="outlined"
+            startIcon={
+              <ExpandMoreIcon
+                sx={{ transform: expanded ? "rotate(180deg)" : "none", transition: "0.2s" }}
+              />
+            }
+            onClick={() => setExpanded((v) => !v)}
+            sx={{
+              flex: isCompactButtons ? "0 0 100%" : "1 1 0%",
+              minWidth: isCompactButtons ? "100%" : 0,
+              maxWidth: isCompactButtons ? "100%" : 350,
+              height: 40,
+              px: 2.5,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {expanded ? "Hide advanced" : "Advanced filters"}
+          </Button>
+
+
+
         </Stack>
       </CardActions>
 
@@ -233,12 +368,19 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
         <CardContent sx={{ pt: 2 }}>
           {/* Fuel Types + Brand row keeps Grid for natural wrapping */}
           <Grid container spacing={2} alignItems="center">
-            <Grid size={{ xs: 12, md: 8 }}>
+            <Grid size={{ xs: 12, md: 5 }}>
               <Autocomplete
                 multiple
                 options={fuelTypeOptions}
-                value={fuelTypes.map((v) => ({ label: v, value: v }))}
-                onChange={(_, val) => onChange({ fuelTypes: val.map((v) => v.value) })}
+                isOptionEqualToValue={(opt, val) => opt.value === val.value}
+                value={Array.from(new Set(fuelTypes ?? [])).map((v) => ({ label: v, value: v }))}
+                onChange={(_, val) =>
+                  onChange({
+                    fuelTypes: Array.from(
+                      new Set(val.map((v) => v.value).filter((v): v is string => Boolean(v)))
+                    ),
+                  })
+                }
                 getOptionLabel={(o) => o.label}
                 renderTags={(value, getTagProps) =>
                   value.map((option, index) => (
@@ -251,12 +393,18 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               />
             </Grid>
 
-            <Grid size={{ xs: 12, md: 4 }}>
+            <Grid size={{ xs: 12, md: 7 }}>
               <Autocomplete
                 multiple
                 options={brandOptionObjs}
-                value={(brandNames ?? []).map((v) => ({ label: v, value: v }))}
-                onChange={(_, val) => onChange({ brandNames: val.map((x) => x.value) })}
+                value={Array.from(new Set(brandNames ?? [])).map((v) => ({ label: v, value: v }))}
+                onChange={(_, val) =>
+                  onChange({
+                    brandNames: Array.from(
+                      new Set(val.map((x) => x.value).filter((v): v is string => Boolean(v)))
+                    ),
+                  })
+                }
                 getOptionLabel={(o) => o.label}
                 isOptionEqualToValue={(opt, val) => opt.value === val.value}
                 renderTags={(value, getTagProps) =>
@@ -309,19 +457,19 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               <MenuItem value="desc">Descending</MenuItem>
             </TextField>
 
-            {/* Cost Prediction — span full row when <1024 */}
+            {/* Cost Prediction – span full row when <1024 */}
             <TextField
-              label="Cost Prediction"
-              value={volumeLitres ?? ""}
-              onChange={(e) =>
-                onChange({
-                  volumeLitres: e.target.value === "" ? undefined : Number(e.target.value),
-                })
-              }
+              label="Cost Calculator"
+              value={volumeInputValue}
+              onChange={(e) => handleVolumeInputChange(e.target.value)}
               placeholder="Enter Volume Charging (L). e.g. 50"
               size="small"
               fullWidth
               sx={{ gridColumn: wide1024 ? "auto" : "1 / -1", minWidth: wide1024 ? 240 : 200 }}
+              inputProps={{
+                inputMode: "decimal",
+                pattern: "[0-9]*\\.?[0-9]*",
+              }}
             />
 
             {/* Active */}
@@ -332,7 +480,7 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               onClick={onApplyVolume}
               sx={{ justifySelf: "start", whiteSpace: "nowrap" }}
             >
-              Active&nbsp;Prediction
+              Active&nbsp;Calculation
             </Button>
 
             {/* Clear */}
@@ -343,7 +491,7 @@ export default function SearchFiltersCard(props: SearchFiltersCardProps) {
               onClick={onClearVolume}
               sx={{ justifySelf: "start", whiteSpace: "nowrap" }}
             >
-              Clear&nbsp;Prediction
+              Clear&nbsp;Calculation
             </Button>
           </Box>
         </CardContent>

@@ -71,6 +71,10 @@ public sealed class FuelFinderDbContext : IdentityDbContext<IdentityUser>
             entity.Property(p => p.UserId).HasMaxLength(450);
             entity.Property(p => p.DefaultSuburb).HasMaxLength(128);
             entity.Property(p => p.PreferredFuelTypes).HasMaxLength(256);
+            entity.Property(p => p.DisplayName).HasMaxLength(128);
+            entity.Property(p => p.AvatarDataUrl).HasColumnType("TEXT");
+            entity.Property(p => p.OverviewFilterFuelTypes).HasMaxLength(256);
+            entity.Property(p => p.OverviewFilterBrandNames).HasMaxLength(512);
 
             entity.HasOne<IdentityUser>()
                 .WithOne()

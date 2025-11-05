@@ -15,15 +15,28 @@ public sealed record RefreshTokenRequest(Guid RefreshTokenId, string RefreshToke
 
 public sealed record LogoutRequest(Guid RefreshTokenId);
 
+public sealed record OverviewFilterSettings(
+    bool Enabled,
+    bool SelectAll,
+    IReadOnlyCollection<string> FuelTypes,
+    IReadOnlyCollection<string> BrandNames,
+    double RadiusKm);
+
 public sealed record UserPreferencesResponse(
     string? DefaultSuburb,
     double? DefaultRadiusKm,
-    IReadOnlyCollection<string> PreferredFuelTypes);
+    IReadOnlyCollection<string> PreferredFuelTypes,
+    string? DisplayName,
+    string? AvatarDataUrl,
+    OverviewFilterSettings? OverviewFilter);
 
 public sealed record UpdatePreferencesRequest(
     string? DefaultSuburb,
     double? DefaultRadiusKm,
-    IReadOnlyCollection<string>? PreferredFuelTypes);
+    IReadOnlyCollection<string>? PreferredFuelTypes,
+    string? DisplayName,
+    string? AvatarDataUrl,
+    OverviewFilterSettings? OverviewFilter);
 
 public sealed record FuelPriceTrendResponse(
     string FuelType,

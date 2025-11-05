@@ -22,7 +22,7 @@ function formatDollarPerL(valueCents: number | null | undefined) {
 
 // Extract date from common keys
 function getDate(rec: AnyRecord): Date | null {
-  const keys = ["timestamp", "ts", "date", "observedAt", "lastUpdated"];
+  const keys = ["recordedAt", "timestamp", "ts", "date", "observedAt", "lastUpdated"];
   for (const k of keys) {
     const v = rec[k];
     if (v == null) continue;
@@ -64,13 +64,21 @@ function toDataset(raw?: AnyRecord[] | null) {
   }
 
   const points: { x: Date; y: number; label: string }[] = [];
-  for (const r of raw) {
-    const x = getDate(r);
-    const y = getCents(r);
-    if (!x || y == null) continue;
-    const label = getFuelType(r) ?? "Price";
-    points.push({ x, y, label });
+
+  for (const entry of raw) {
+    const baseLabel = getFuelType(entry);
+    const candidatePoints = Array.isArray(entry.points) ? entry.points : [entry];
+
+    for (const point of candidatePoints) {
+      const x = getDate(point);
+      const y = getCents(point);
+      if (!x || y == null) continue;
+
+      const label = getFuelType(point) ?? baseLabel ?? "Price";
+      points.push({ x, y, label });
+    }
   }
+
   points.sort((a, b) => a.x.getTime() - b.x.getTime());
 
   if (points.length === 0) return { dataset: [], labels: [] as string[] };

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NSWFuelFinder.Data;
 
@@ -10,9 +11,11 @@ using NSWFuelFinder.Data;
 namespace NSWFuelFinder.Migrations
 {
     [DbContext(typeof(FuelFinderDbContext))]
-    partial class FuelFinderDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251104153727_ExtendUserPreferences")]
+    partial class ExtendUserPreferences
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.8");

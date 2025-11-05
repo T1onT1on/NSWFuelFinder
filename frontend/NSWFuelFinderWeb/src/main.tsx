@@ -7,7 +7,8 @@ import "./styles/index.css";
 
 import { AppRouter } from "./router";
 import { AuthProvider } from "./context/AuthContext";
-import AppProviders from "./app/AppProviders"; // ⬅️ 引入
+import AppProviders from "./app/AppProviders";
+import AuthInterceptorBridge from "./app/AuthInterceptorBridge"; // ✅ 新增
 
 const queryClient = new QueryClient();
 
@@ -18,6 +19,8 @@ ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
+        {/* 挂载一次，给 apiClient 安装带 Token 与 401 自动刷新的拦截器 */}
+        <AuthInterceptorBridge /> {/* ✅ 新增 */}
         <AppProviders>
           <RouterProvider router={AppRouter} />
         </AppProviders>

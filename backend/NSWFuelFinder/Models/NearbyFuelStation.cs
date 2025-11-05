@@ -8,6 +8,10 @@ public sealed class NearbyFuelStation
 
     public string? Brand { get; init; }
 
+    public string? BrandCanonical { get; init; }
+
+    public string? BrandOriginal { get; init; }
+
     public string? Address { get; init; }
 
     public string? Suburb { get; init; }

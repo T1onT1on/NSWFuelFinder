@@ -12,6 +12,9 @@ using NSWFuelFinder.Options;
 using NSWFuelFinder.Services;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+
+const double DefaultOverviewRadiusKm = 5d;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -172,6 +175,7 @@ app.MapGet("/api/stations/nearby", async Task<IResult> (
 app.MapGet("/api/prices/cheapest", async Task<IResult> (
     [FromQuery(Name = "fuelTypes")] string[]? fuelTypes,
     [FromQuery] string? fuelType,
+    [FromQuery(Name = "brands")] string[]? brands,
     FuelFinderDbContext dbContext,
     IOptions<FuelDisplayOptions> displayOptions,
     CancellationToken cancellationToken) =>
@@ -188,6 +192,12 @@ app.MapGet("/api/prices/cheapest", async Task<IResult> (
         ? requestedFuelTypes
         : allowedFuelSet.ToArray();
 
+    var requestedBrands = NormalizeBrandFilters(brands);
+    var hasBrandFilter = requestedBrands.Count > 0;
+    var brandFilterSet = hasBrandFilter
+        ? new HashSet<string>(requestedBrands, StringComparer.OrdinalIgnoreCase)
+        : null;
+
     var results = new List<CheapestPriceResponse>(targetFuelTypes.Length);
 
     foreach (var fuel in targetFuelTypes)
@@ -197,6 +207,17 @@ app.MapGet("/api/prices/cheapest", async Task<IResult> (
             .Include(p => p.Station)
             .Where(p => p.FuelType == fuel)
             .ToListAsync(cancellationToken);
+
+        if (hasBrandFilter)
+        {
+            priceCandidates = priceCandidates
+                .Where(p =>
+                {
+                    var canonical = BrandNormalizer.GetCanonical(p.Station?.Brand);
+                    return canonical is not null && brandFilterSet!.Contains(canonical);
+                })
+                .ToList();
+        }
 
         var priceEntity = priceCandidates
             .OrderBy(p => p.Price)
@@ -217,7 +238,9 @@ app.MapGet("/api/prices/cheapest", async Task<IResult> (
             {
                 StationCode = priceEntity.Station.StationCode,
                 Name = priceEntity.Station.Name,
-                Brand = priceEntity.Station.Brand,
+                Brand = BrandNormalizer.GetDisplay(priceEntity.Station.Brand),
+                BrandCanonical = BrandNormalizer.GetCanonical(priceEntity.Station.Brand),
+                BrandOriginal = priceEntity.Station.Brand,
                 Address = priceEntity.Station.Address,
                 Suburb = priceEntity.Station.Suburb,
                 State = priceEntity.Station.State,
@@ -267,9 +290,10 @@ app.MapGet("/api/stations/{stationCode}/trends", async Task<IResult> (
         historyQuery = historyQuery.Where(h => h.FuelType.ToUpper() == normalizedFuelType);
     }
 
-    var historyItems = await historyQuery
+    var historyItems = await historyQuery.ToListAsync(cancellationToken);
+    historyItems = historyItems
         .Where(h => h.RecordedAtUtc >= minTimestamp)
-        .ToListAsync(cancellationToken);
+        .ToList();
 
     var priceQuery = dbContext.Prices
         .AsNoTracking()
@@ -339,12 +363,14 @@ app.MapGet("/api/stations/{stationCode}/trends", async Task<IResult> (
         var normalizedMissing = missingFuelTypes.ToList();
         var previousHistory = await dbContext.PriceHistory
             .AsNoTracking()
-            .Where(h => h.StationCode == normalizedCode && h.RecordedAtUtc < minTimestamp)
-            .Where(h => normalizedMissing.Contains(h.FuelType.ToUpper()))
-            .OrderByDescending(h => h.RecordedAtUtc)
+            .Where(h => h.StationCode == normalizedCode)
             .ToListAsync(cancellationToken);
 
-        foreach (var item in previousHistory)
+        foreach (var item in previousHistory
+                     .Where(h => h.RecordedAtUtc < minTimestamp)
+                     .Where(h => !string.IsNullOrWhiteSpace(h.FuelType))
+                     .Where(h => normalizedMissing.Contains(h.FuelType.ToUpper()))
+                     .OrderByDescending(h => h.RecordedAtUtc))
         {
             if (string.IsNullOrWhiteSpace(item.FuelType))
             {
@@ -526,12 +552,7 @@ app.MapGet("/api/users/me/preferences", async Task<IResult> (
         .AsNoTracking()
         .FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
 
-    var response = entity is null
-        ? new UserPreferencesResponse(null, null, Array.Empty<string>())
-        : new UserPreferencesResponse(
-            entity.DefaultSuburb,
-            entity.DefaultRadiusKm,
-            SplitFuelTypes(entity.PreferredFuelTypes));
+    var response = BuildUserPreferencesResponse(entity);
 
     return Results.Ok(response);
 })
@@ -556,8 +577,46 @@ app.MapPut("/api/users/me/preferences", async Task<IResult> (
         .FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
 
     var preferredFuelTypes = request.PreferredFuelTypes is { Count: > 0 }
-        ? string.Join(',', request.PreferredFuelTypes.Select(f => f.Trim().ToUpperInvariant()).Where(f => !string.IsNullOrWhiteSpace(f)))
+        ? string.Join(",", request.PreferredFuelTypes
+            .Select(f => f.Trim().ToUpperInvariant())
+            .Where(f => !string.IsNullOrWhiteSpace(f)))
         : null;
+
+    var displayName = string.IsNullOrWhiteSpace(request.DisplayName)
+        ? null
+        : request.DisplayName!.Trim();
+
+    var avatarDataUrl = string.IsNullOrWhiteSpace(request.AvatarDataUrl)
+        ? null
+        : request.AvatarDataUrl;
+
+    var overview = request.OverviewFilter;
+    var overviewEnabled = overview?.Enabled ?? false;
+    var overviewSelectAll = overview?.SelectAll ?? true;
+
+    string? overviewFuelTypes = null;
+    if (overview is { FuelTypes.Count: > 0 } && !overviewSelectAll)
+    {
+        overviewFuelTypes = string.Join(",", overview.FuelTypes
+            .Select(f => f.Trim().ToUpperInvariant())
+            .Where(f => !string.IsNullOrWhiteSpace(f)));
+    }
+
+    string? overviewBrandNames = null;
+    if (overview is { BrandNames.Count: > 0 })
+    {
+        overviewBrandNames = string.Join(",", overview.BrandNames
+            .Select(b => b?.Trim())
+            .Where(b => !string.IsNullOrWhiteSpace(b))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    double overviewRadius = overview?.RadiusKm ?? request.DefaultRadiusKm ?? DefaultOverviewRadiusKm;
+    if (overviewRadius <= 0)
+    {
+        overviewRadius = DefaultOverviewRadiusKm;
+    }
+    overviewRadius = Math.Clamp(overviewRadius, 1d, 50d);
 
     if (entity is null)
     {
@@ -567,6 +626,13 @@ app.MapPut("/api/users/me/preferences", async Task<IResult> (
             DefaultSuburb = request.DefaultSuburb,
             DefaultRadiusKm = request.DefaultRadiusKm,
             PreferredFuelTypes = preferredFuelTypes,
+            DisplayName = displayName,
+            AvatarDataUrl = avatarDataUrl,
+            OverviewFilterEnabled = overviewEnabled,
+            OverviewFilterSelectAll = overviewSelectAll,
+            OverviewFilterFuelTypes = overviewFuelTypes,
+            OverviewFilterBrandNames = overviewBrandNames,
+            OverviewFilterRadiusKm = overviewRadius,
             UpdatedAtUtc = DateTimeOffset.UtcNow
         };
         dbContext.Preferences.Add(entity);
@@ -576,15 +642,19 @@ app.MapPut("/api/users/me/preferences", async Task<IResult> (
         entity.DefaultSuburb = request.DefaultSuburb;
         entity.DefaultRadiusKm = request.DefaultRadiusKm;
         entity.PreferredFuelTypes = preferredFuelTypes;
+        entity.DisplayName = displayName;
+        entity.AvatarDataUrl = avatarDataUrl;
+        entity.OverviewFilterEnabled = overviewEnabled;
+        entity.OverviewFilterSelectAll = overviewSelectAll;
+        entity.OverviewFilterFuelTypes = overviewFuelTypes;
+        entity.OverviewFilterBrandNames = overviewBrandNames;
+        entity.OverviewFilterRadiusKm = overviewRadius;
         entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
     }
 
     await dbContext.SaveChangesAsync(cancellationToken);
 
-    var response = new UserPreferencesResponse(
-        entity.DefaultSuburb,
-        entity.DefaultRadiusKm,
-        SplitFuelTypes(entity.PreferredFuelTypes));
+    var response = BuildUserPreferencesResponse(entity);
 
     return Results.Ok(response);
 })
@@ -594,11 +664,60 @@ app.MapPut("/api/users/me/preferences", async Task<IResult> (
 
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
+    var services = scope.ServiceProvider;
+    var db = services.GetRequiredService<FuelFinderDbContext>();
     await db.Database.MigrateAsync();
+
+    var loggerFactory = services.GetRequiredService<ILoggerFactory>();
+    var startupLogger = loggerFactory.CreateLogger("StartupMetrics");
+    try
+    {
+        var historyCount = await db.PriceHistory.CountAsync();
+        startupLogger.LogInformation("Price history rows available at startup: {HistoryCount}", historyCount);
+    }
+    catch (Exception ex)
+    {
+        startupLogger.LogError(ex, "Failed to read price history count on startup.");
+    }
 }
 
 app.Run();
+
+static UserPreferencesResponse BuildUserPreferencesResponse(UserPreferenceEntity? entity)
+{
+    if (entity is null)
+    {
+        return new UserPreferencesResponse(
+            null,
+            null,
+            Array.Empty<string>(),
+            null,
+            null,
+            new OverviewFilterSettings(false, true, Array.Empty<string>(), Array.Empty<string>(), DefaultOverviewRadiusKm));
+    }
+
+    var overviewRadius = entity.OverviewFilterRadiusKm ?? entity.DefaultRadiusKm ?? DefaultOverviewRadiusKm;
+    if (overviewRadius <= 0)
+    {
+        overviewRadius = DefaultOverviewRadiusKm;
+    }
+    overviewRadius = Math.Clamp(overviewRadius, 1d, 50d);
+
+    return new UserPreferencesResponse(
+        entity.DefaultSuburb,
+        entity.DefaultRadiusKm,
+        SplitFuelTypes(entity.PreferredFuelTypes),
+        entity.DisplayName,
+        entity.AvatarDataUrl,
+        new OverviewFilterSettings(
+            entity.OverviewFilterEnabled,
+            entity.OverviewFilterSelectAll,
+            entity.OverviewFilterSelectAll
+                ? Array.Empty<string>()
+                : SplitFuelTypes(entity.OverviewFilterFuelTypes),
+            SplitBrandNames(entity.OverviewFilterBrandNames),
+            overviewRadius));
+}
 
 
 static bool IsValidLatitude(double value) => value is >= -90 and <= 90;
@@ -632,6 +751,28 @@ static IReadOnlyCollection<string> SplitFuelTypes(string? raw) =>
         : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(f => f.ToUpperInvariant())
             .ToArray();
+
+static IReadOnlyCollection<string> SplitBrandNames(string? raw) =>
+    string.IsNullOrWhiteSpace(raw)
+        ? Array.Empty<string>()
+        : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(b => b)
+            .ToArray();
+
+static IReadOnlyList<string> NormalizeBrandFilters(string[]? brands)
+{
+    if (brands is null || brands.Length == 0)
+    {
+        return Array.Empty<string>();
+    }
+
+    return brands
+        .Select(BrandNormalizer.GetCanonical)
+        .Where(b => !string.IsNullOrWhiteSpace(b))
+        .Select(b => b!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
 
 static string NormalizeFuelType(string fuelType) =>
     string.IsNullOrWhiteSpace(fuelType)
@@ -670,6 +811,8 @@ internal sealed class StationSummary
     public string StationCode { get; init; } = string.Empty;
     public string? Name { get; init; }
     public string? Brand { get; init; }
+    public string? BrandCanonical { get; init; }
+    public string? BrandOriginal { get; init; }
     public string? Address { get; init; }
     public string? Suburb { get; init; }
     public string? State { get; init; }
@@ -677,3 +820,4 @@ internal sealed class StationSummary
     public double Latitude { get; init; }
     public double Longitude { get; init; }
 }
+

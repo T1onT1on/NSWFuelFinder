@@ -146,6 +146,10 @@ public sealed class FuelDataSyncService : BackgroundService
 
         await dbContext.PriceHistory.AddRangeAsync(historyEntries, cancellationToken).ConfigureAwait(false);
 
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.", historyEntries.Count, syncTimestamp);
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 

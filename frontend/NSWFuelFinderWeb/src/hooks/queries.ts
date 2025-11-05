@@ -13,16 +13,26 @@ const appendSearchParams = (params: URLSearchParams, key: string, value: string 
   params.append(key, String(value));
 };
 
-export const useCheapestPrices = (fuelTypes?: string[]) => {
+export const useCheapestPrices = (fuelTypes?: string[], brands?: string[]) => {
   const client = useApiClient();
   return useQuery<CheapestPriceResponse[]>({
-    queryKey: ["cheapest", fuelTypes?.slice().sort().join(",")],
+    queryKey: [
+      "cheapest",
+      fuelTypes?.slice().sort().join(","),
+      brands?.slice().sort().join(","),
+    ],
     queryFn: async () => {
       let url = "/api/prices/cheapest";
+      const params = new URLSearchParams();
       if (fuelTypes && fuelTypes.length > 0) {
-        const params = new URLSearchParams();
         fuelTypes.forEach((fuel) => params.append("fuelTypes", fuel));
-        url = `${url}?${params.toString()}`;
+      }
+      if (brands && brands.length > 0) {
+        brands.forEach((brand) => params.append("brands", brand));
+      }
+      const queryString = params.toString();
+      if (queryString) {
+        url = `${url}?${queryString}`;
       }
       const { data } = await client.get<CheapestPriceResponse[]>(url);
       return data;

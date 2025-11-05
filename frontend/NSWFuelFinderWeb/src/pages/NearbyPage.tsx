@@ -15,7 +15,9 @@ import { fuelDisplayOrder } from "../utils/fuelColors";
 import StationsDataGrid from "../components/tables/StationsDataGrid";
 import SearchFiltersCard from "../components/filters/SearchFiltersCard";
 import { useNearbyStations, type NearbyFilter } from "../hooks/queries";
+import { NumberOnlyValidation } from "../utils/numberOnlyValidation";
 import type { NearbyFuelStation } from "../types";
+import { useNotify } from "../components/feedback/NotifyProvider";
 
 /** Page-level search mode */
 type SearchMode = "location" | "suburb" | null;
@@ -94,6 +96,14 @@ export const NearbyPage: React.FC = () => {
   );
   const [hasPendingVolumeChange, setHasPendingVolumeChange] =
     useState<boolean>(false);
+  const [hasSearched, setHasSearched] = useState<boolean>(Boolean(initialPersisted.current?.searchParams));
+  const [filtersReminderShown, setFiltersReminderShown] = useState<boolean>(false);
+  const [pendingSearchToast, setPendingSearchToast] = useState(false);
+  const { notify } = useNotify();
+  const showValidationError = (label: string, message?: string) => {
+    notify(message ?? `Enter a valid "${label}".`, "error");
+  };
+
 
   // ---------- data ----------
   const { data, isLoading, isError } = useNearbyStations(searchParams);
@@ -132,6 +142,16 @@ export const NearbyPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!pendingSearchToast) return;
+    if (isLoading) return;
+
+    if (!isError && searchParams) {
+      notify("Result Loaded Successfully.", "success");
+    }
+    setPendingSearchToast(false);
+  }, [isLoading, isError, pendingSearchToast, searchParams, notify]);
+
   // ---------- handlers ----------
   const patchForm = (patch: Partial<FormValues>) => {
     setFormVals((prev) => ({ ...prev, ...patch }));
@@ -143,6 +163,9 @@ export const NearbyPage: React.FC = () => {
     setMode(target);
     setSearchParams(null);
     persistedState = null;
+    setHasSearched(false);
+    setFiltersReminderShown(false);
+    setPendingSearchToast(false);
 
     const next = buildDefaultFormValues();
     setFormVals(next);
@@ -176,7 +199,18 @@ export const NearbyPage: React.FC = () => {
       return false;
     }
 
-    const radius = Math.min(Math.max(formVals.radiusKm ?? defaultRadiusKm, 1), 50);
+    const radiusValidation = NumberOnlyValidation(formVals.radiusKm, {
+      fieldLabel: "Fuel Stations Within (km)",
+      allowDecimal: true,
+      min: 2,
+      max: 100,
+    });
+    if (!radiusValidation.isValid || radiusValidation.sanitizedValue == null) {
+      showValidationError("Fuel Stations Within (km)", radiusValidation.errorMessage);
+      return false;
+    }
+    const radius = radiusValidation.sanitizedValue;
+
     const trimmedSuburb = formVals.suburb?.trim() || undefined;
     const sortByValue = formVals.sortBy ?? "distance";
     const sortOrderValue = formVals.sortOrder ?? "asc";
@@ -188,15 +222,40 @@ export const NearbyPage: React.FC = () => {
       appliedVolume && appliedVolume > 0 ? appliedVolume : undefined;
 
     let filter: NearbyFilter | null = null;
+    let nextLatitude: number | undefined = formVals.latitude;
+    let nextLongitude: number | undefined = formVals.longitude;
 
     if (mode === "location") {
-      if (formVals.latitude == null || formVals.longitude == null) {
-        console.warn("Latitude and longitude are required for location search.");
+      const latitudeValidation = NumberOnlyValidation(formVals.latitude, {
+        fieldLabel: "Latitude",
+        allowDecimal: true,
+        min: -90,
+        max: 90,
+      });
+      if (!latitudeValidation.isValid || latitudeValidation.sanitizedValue == null) {
+        showValidationError("Latitude", latitudeValidation.errorMessage);
         return false;
       }
+      nextLatitude = latitudeValidation.sanitizedValue;
+
+      const longitudeValidation = NumberOnlyValidation(formVals.longitude, {
+        fieldLabel: "Longitude",
+        allowDecimal: true,
+        min: -180,
+        max: 180,
+      });
+      if (
+        !longitudeValidation.isValid ||
+        longitudeValidation.sanitizedValue == null
+      ) {
+        showValidationError("Longitude", longitudeValidation.errorMessage);
+        return false;
+      }
+      nextLongitude = longitudeValidation.sanitizedValue;
+
       filter = {
-        latitude: formVals.latitude,
-        longitude: formVals.longitude,
+        latitude: nextLatitude,
+        longitude: nextLongitude,
         radiusKm: radius,
         suburb: trimmedSuburb,
         fuelTypes: formVals.fuelTypes,
@@ -207,9 +266,11 @@ export const NearbyPage: React.FC = () => {
       };
     } else {
       if (!trimmedSuburb) {
-        console.warn("Please enter a suburb to search.");
+        showValidationError("Suburb", "Please enter a suburb to search.");
         return false;
       }
+      nextLatitude = undefined;
+      nextLongitude = undefined;
       filter = {
         suburb: trimmedSuburb,
         radiusKm: radius,
@@ -224,10 +285,10 @@ export const NearbyPage: React.FC = () => {
     // persist in form
     setFormVals((prev) => ({
       ...prev,
-      latitude: filter.latitude,
-      longitude: filter.longitude,
+      latitude: nextLatitude,
+      longitude: nextLongitude,
       suburb: filter.suburb,
-      radiusKm: filter.radiusKm,
+      radiusKm: radius,
       fuelTypes: filter.fuelTypes ?? [],
       brands: normalizedBrands,
       volumeLitres: volumeFromState,
@@ -239,10 +300,10 @@ export const NearbyPage: React.FC = () => {
     persistedState = {
       mode: mode,
       formValues: {
-        latitude: filter.latitude,
-        longitude: filter.longitude,
+        latitude: nextLatitude,
+        longitude: nextLongitude,
         suburb: filter.suburb,
-        radiusKm: filter.radiusKm,
+        radiusKm: radius,
         fuelTypes: filter.fuelTypes ?? [],
         brands: normalizedBrands,
         volumeLitres: volumeFromState,
@@ -254,6 +315,9 @@ export const NearbyPage: React.FC = () => {
 
     setHasFilterChanges(false);
     setHasPendingVolumeChange(!volumeEquals(volumeInput, volumeFromState));
+    setHasSearched(true);
+    setFiltersReminderShown(false);
+    setPendingSearchToast(true);
     return true;
   };
 
@@ -285,11 +349,21 @@ export const NearbyPage: React.FC = () => {
   };
 
   const performApplyVolume = (): boolean => {
-    if (volumeInput == null || Number.isNaN(volumeInput) || volumeInput <= 0) {
-      console.warn("Enter a volume in litres greater than zero.");
+    const validation = NumberOnlyValidation(volumeInput, {
+      fieldLabel: "Cost Calculator Volume (L)",
+      allowDecimal: true,
+      min: 1,
+      max: 200,
+    });
+    if (!validation.isValid || validation.sanitizedValue == null) {
+      showValidationError(
+        "Cost Calculator Volume (L)",
+        validation.errorMessage
+      );
       return false;
     }
-    const normalized = Number(volumeInput);
+    const normalized = validation.sanitizedValue;
+    setVolumeInput(normalized);
     setAppliedVolume(normalized);
     setFormVals((prev) => ({ ...prev, volumeLitres: normalized }));
 
@@ -428,8 +502,29 @@ export const NearbyPage: React.FC = () => {
           geolocationSupported={geolocationSupported}
           // events
           onChange={(p) => {
-            setFormVals((prev) => ({ ...prev, ...p }));
+            const touchedFilters =
+              Object.prototype.hasOwnProperty.call(p, "fuelTypes") ||
+              Object.prototype.hasOwnProperty.call(p, "brandNames");
+
+            const patch: Partial<FormValues> & { brandNames?: string[] } = { ...p };
+            if (Object.prototype.hasOwnProperty.call(patch, "brandNames")) {
+              const nextBrands = patch.brandNames;
+              delete patch.brandNames;
+              patch.brands = nextBrands;
+            }
+            setFormVals((prev) => ({ ...prev, ...patch }));
             setHasFilterChanges(true);
+
+            if (touchedFilters && hasSearched && !filtersReminderShown) {
+              notify(
+                <>
+                  Filter Adjusted, <strong>Press Search Again</strong> to Apply.
+                </>,
+                "info",
+                { color: "#8C550F", textColor: "#ffffff" }
+              );
+              setFiltersReminderShown(true);
+            }
 
             if (Object.prototype.hasOwnProperty.call(p, "volumeLitres")) {
               const next = p.volumeLitres as number | undefined;
@@ -478,7 +573,7 @@ export const NearbyPage: React.FC = () => {
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {mode
-                    ? "Adjust the filters above and click Search to see nearby stations."
+                    ? "Adjust the filters above and click Search to check information."
                     : "Select Search by Current Location or Search by Suburb to get started."}
                 </Typography>
               </>

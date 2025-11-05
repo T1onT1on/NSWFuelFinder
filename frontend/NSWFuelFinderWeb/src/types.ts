@@ -11,6 +11,8 @@ export type NearbyFuelStation = {
   id: string;
   name: string;
   brand?: string | null;
+  brandCanonical?: string | null;
+  brandOriginal?: string | null;
   address?: string | null;
   suburb?: string | null;
   state?: string | null;
@@ -39,12 +41,15 @@ export type CheapestPriceResponse = {
     stationCode: string;
     name?: string | null;
     brand?: string | null;
+    brandCanonical?: string | null;
+    brandOriginal?: string | null;
     address?: string | null;
     suburb?: string | null;
     state?: string | null;
     postcode?: string | null;
     latitude: number;
     longitude: number;
+    distanceKm?: number | null;
   };
 };
 
