@@ -7,7 +7,7 @@ COPY . .
 WORKDIR /src
 
 # Publish backend project
-RUN dotnet publish backend/NSWFuelFinder/NSWFuelFinder.csproj -c Release -o /app/publish
+RUN dotnet publish NSWFuelFinder.csproj -c Release -o /app/publish
 
 # ---------- Runtime stage ----------
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
