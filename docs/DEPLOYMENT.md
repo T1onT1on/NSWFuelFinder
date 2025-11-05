@@ -89,6 +89,20 @@
 
 | 键名 | 说明 |
 | --- | --- |
+| `ALLOWED_ORIGINS` | * |
+| `ASPNETCORE_ENVIRONMENT` | Production |
+| `Jwt__Issuer` / `Jwt__Audience` / `Jwt__SigningKey` | NSWFuelFinder/Audience/GZ0d#kV4rL1pW8s3Y2q9Mx5Ub7cNe0fS |
+| `ConnectionStrings__FuelFinder` | Host=ep-muddy-brook-a7l3hw5d-pooler.ap-southeast-2.aws.neon.tech;Port=5432;Database=neondb;Username=neondb_owner;Password=npg_aD0fYpy1HFGC;Ssl Mode=Require;Trust Server Certificate=true; |
+| `NswFuelApi__BaseUrl` | 默认 `https://api.onegov.nsw.gov.au`，按需调整。 |
+| `NswFuelApi__NearbyPath` / `NswFuelApi__AllPricesPath` / `NswFuelApi__TokenPath` | FuelPriceCheck/v1/fuel/prices/nearby[]FuelPriceCheck/v1/fuel/prices[]oauth/client_credential/accesstoken |
+| `NswFuelApi__ApiKey` / `NswFuelApi__ApiSecret` | eiGSJg4vR7TBRmkvBIjxGfpaJwnTHzLU[] 2GNWoycwrGMtCDQr|
+| `Database__Provider` | Postgres|
+
+Render UI 会自动将 `__` 转换为层级配置 (`ConnectionStrings:FuelFinder`)。
+
+当前Render:
+| 键名 | 说明 |
+| --- | --- |
 | `ASPNETCORE_ENVIRONMENT` | 建议设为 `Production`。 |
 | `ConnectionStrings__FuelFinder` | Neon 连接串（参照上文）。 |
 | `Jwt__Issuer` / `Jwt__Audience` / `Jwt__SigningKey` | JWT 配置。 |
@@ -97,8 +111,6 @@
 | `NswFuelApi__NearbyPath` / `NswFuelApi__AllPricesPath` / `NswFuelApi__TokenPath` | 使用默认即可。 |
 | `NswFuelApi__ApiKey` / `NswFuelApi__ApiSecret` | NSW Fuel API 凭证。若有预制 Authorization，可用 `NswFuelApi__Authorization` 替代。 |
 | `FuelDisplay__AllowedFuelTypes` | 若需要自定义可设置为逗号分隔列表。 |
-
-Render UI 会自动将 `__` 转换为层级配置 (`ConnectionStrings:FuelFinder`)。
 
 ### 3.3 备选：后台 Worker / Cron
 
