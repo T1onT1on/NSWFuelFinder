@@ -14,10 +14,30 @@ using NSWFuelFinder.Services;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.HttpOverrides;
 
 const double DefaultOverviewRadiusKm = 5d;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.KnownNetworks.Clear();
+    o.KnownProxies.Clear();
+});
+
+// Bind to Render's assigned port if present
+var renderPort = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrEmpty(renderPort) && int.TryParse(renderPort, out var port))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+else
+{
+    builder.WebHost.UseUrls("http://0.0.0.0:5098");
+}
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -111,7 +131,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+app.UseForwardedHeaders();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 app.UseCors("AllowLocalhost");
 app.UseCookiePolicy(new CookiePolicyOptions
 {
@@ -676,6 +701,8 @@ app.MapPut("/api/users/me/preferences", async Task<IResult> (
 .WithName("UpdateUserPreferences")
 .WithOpenApi();
 
+
+
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -834,4 +861,6 @@ internal sealed class StationSummary
     public double Latitude { get; init; }
     public double Longitude { get; init; }
 }
+
+
 
