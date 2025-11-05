@@ -112,6 +112,7 @@ builder.Services.AddHttpClient<IFuelApiClient, FuelApiClient>();
 builder.Services.AddScoped<IFuelStationService, FuelStationService>();
 builder.Services.AddScoped<ITokenService, JwtTokenService>();
 builder.Services.AddHostedService<FuelDataSyncService>();
+builder.Services.AddHealthChecks();
 
 builder.Services.AddCors(options =>
 {
@@ -146,6 +147,8 @@ app.UseCookiePolicy(new CookiePolicyOptions
 });
 app.UseAuthentication();
 app.UseAuthorization();
+
+app.MapHealthChecks("/healthz");
 
 app.MapGet("/api/stations/nearby", async Task<IResult> (
     [FromQuery] double? latitude,

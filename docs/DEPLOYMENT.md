@@ -27,6 +27,10 @@
    Password=<password>;
    Ssl Mode=Require;
    Trust Server Certificate=true;
+   PGUSER=neondb_owner
+   PGPASSWORD=npg_aD0fYpy1HFGC
+   Host=ep-muddy-brook-a7l3hw5d-pooler.ap-southeast-2.aws.neon.tech;Port=5432;Database=neondb;Username=neondb_owner;Password=npg_aD0fYpy1HFGC;Ssl Mode=Require;Trust Server Certificate=true;
+   
    ```
 3. 使用本地或云端运行一次迁移（任选其一）：
    ```bash
@@ -64,6 +68,25 @@
 
 ### 3.2 环境变量
 
+• Render 环境变量建议配置如下（键名中 __ 会自动转换成 :）：
+
+    Host=...;Port=5432;Database=...;Username=...;Password=...;Ssl Mode=Require;Trust Server
+    Certificate=true
+  - Jwt__Issuer：JWT 发行者（自定义）
+  - Jwt__Audience：JWT 受众（自定义）
+  - Jwt__SigningKey：JWT 签名密钥（建议 ≥64 字符的随机字符串）
+  - Jwt__ExpiresMinutes（可选）：令牌有效分钟数，留空则使用默认 60
+  - Jwt__RefreshTokenExpiresDays（可选）：刷新令牌有效天数，留空则使用默认 7
+  - NswFuelApi__BaseUrl：默认 https://api.onegov.nsw.gov.au；如无特别需求沿用即可
+  - NswFuelApi__NearbyPath：默认 FuelPriceCheck/v1/fuel/prices/nearby
+  - NswFuelApi__AllPricesPath：默认 FuelPriceCheck/v1/fuel/prices
+  - NswFuelApi__TokenPath：默认 oauth/client_credential/accesstoken
+  - NswFuelApi__ApiKey：NSW Fuel API 的订阅 Key
+  - NswFuelApi__ApiSecret：NSW Fuel API 的 Client Secret（若改用预生成 Authorization header，可换成
+    NswFuelApi__Authorization）
+  - FuelDisplay__AllowedFuelTypes（可选）：逗号分隔的油品列表，默认 [ "E10", "U91", "P95", "P98", "DL",
+    "PDL" ]
+
 | 键名 | 说明 |
 | --- | --- |
 | `ASPNETCORE_ENVIRONMENT` | 建议设为 `Production`。 |
@@ -88,6 +111,16 @@ Render UI 会自动将 `__` 转换为层级配置 (`ConnectionStrings:FuelFinder
 1. 连接 GitHub 仓库，选择 `frontend/NSWFuelFinderWeb` 目录。
 2. 默认 Build Command：`npm run build`；Output Directory：`dist`（Vite 默认）。
 3. 环境变量（Preview/Production 均同）：
+
+• 不需要完全相同，但必须匹配那些要相互验证的值，尤其是 JWT 相关：
+
+  - Jwt__Issuer、Jwt__Audience、Jwt__SigningKey 这三项，前端如果要验证 JWT（或拼接请求时需要某个值），
+    就要和后端一致。在你的项目里，JWT 是由后端生成，前端只需要拿到 token 调用 API，所以更多是在后端配
+    置；只是以后如果前端要解析 token，可以把这些值同步到 Vercel。但至少后端必须配置到 Render 的环境变量
+    里，前端拿着后端签发的 token 就能用。
+  - ConnectionStrings__FuelFinder、NswFuelApi__ApiKey 等仅后端需要，前端无需设置。
+  - VITE_API_BASE_URL 是前端在 Vercel 上的关键变量，指出后端 Render 服务的公共 URL；这个值只在 Vercel
+    配置，不需要在后端重复。
 
 | 键名 | 值示例 |
 | --- | --- |
