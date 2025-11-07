@@ -23,6 +23,7 @@
     "antd": "^5.27.6",
     "axios": "^1.7.9",
     "dayjs": "^1.11.19",
+    "express": "^5.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.4"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Stack,
   Typography,
+  CircularProgress,
   Alert,
   Box,
   Container,
@@ -10,17 +11,13 @@ import {
   FormControlLabel,
   Switch,
   ToggleButton,
-  AlertTitle,
-  CircularProgress,
 } from "@mui/material";
 
-import { useQueryClient } from "@tanstack/react-query";
-import { useServerStatus } from "../hooks/useServerStatus";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
 import LocationDisabledIcon from "@mui/icons-material/LocationDisabled";
-import CheckBoxIcon from "@mui/icons-material/CheckBox";
-import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
-import WakeBanner from "../components/status/WakeBanner";
+import CheckBoxIcon from '@mui/icons-material/CheckBox';
+import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
+
 
 import {
   useCheapestPrices,
@@ -28,10 +25,10 @@ import {
   type NearbyFilter,
 } from "../hooks/queries";
 
+
 import type { CheapestPriceResponse, NearbyFuelStation } from "../types";
 import { compareFuelTypes, fuelDisplayOrder } from "../utils/fuelColors";
 import PriceCard from "../components/data-display/PriceCard";
-import { PriceCardSkeleton } from "../components/data-display/PriceCardSkeleton";
 
 import FuelFilterChips from "../components/ui/FuelFilterChips";
 import { useNotify } from "../components/feedback/NotifyProvider";
@@ -49,19 +46,22 @@ import {
   type StoredUserProfile,
 } from "../utils/userProfileStorage";
 import { useAuth } from "../context/AuthContext";
-
 const BRAND_SHORTCUT_LOOKUP = new Map<string, string[]>(
   OVERVIEW_BRAND_SHORTCUTS.map((shortcut) => [shortcut.id, shortcut.brands])
 );
 
 const arraysEqualIgnoreCase = (a: readonly string[] | undefined, b: readonly string[]) => {
   const arrA = a ?? [];
-  if (arrA.length !== b.length) return false;
+  if (arrA.length !== b.length) {
+    return false;
+  }
   const setA = new Set(arrA.map((value) => value.toUpperCase()));
   return b.every((value) => setA.has(value.toUpperCase()));
 };
 
-function buildCheapestFromNearby(stations: NearbyFuelStation[]): CheapestPriceResponse[] {
+function buildCheapestFromNearby(
+  stations: NearbyFuelStation[]
+): CheapestPriceResponse[] {
   const cheapest = new Map<string, CheapestPriceResponse>();
   stations.forEach((s) => {
     s.prices.forEach((p) => {
@@ -97,24 +97,13 @@ function buildCheapestFromNearby(stations: NearbyFuelStation[]): CheapestPriceRe
 }
 
 export default function OverviewPage() {
-  const qc = useQueryClient();
   const { notify } = useNotify();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const { isAuthenticated } = useAuth();
-  const [storedProfile, setStoredProfile] = useState<StoredUserProfile>(() =>
-    readStoredUserProfile()
-  );
+  const [storedProfile, setStoredProfile] = useState<StoredUserProfile>(() => readStoredUserProfile());
   const overviewPref = storedProfile.overviewFilterPreference;
 
-  // backend status
-  const {
-    status: serverStatus,
-    isServerReady,
-    lastHttpCode,
-  } = useServerStatus();
-
-  
   // UI state
   const [selectedFuelTypes, setSelectedFuelTypes] = useState<string[]>([]);
   const [selectAll, setSelectAll] = useState<boolean>(true);
@@ -124,8 +113,7 @@ export default function OverviewPage() {
     DEFAULT_OVERVIEW_BRAND_SHORTCUT_IDS
   );
   const [customBrandNames, setCustomBrandNames] = useState<string[]>([]);
-  const [nearbyRadiusKm, setNearbyRadiusKm] =
-    useState<number>(DEFAULT_OVERVIEW_RADIUS_KM);
+  const [nearbyRadiusKm, setNearbyRadiusKm] = useState<number>(DEFAULT_OVERVIEW_RADIUS_KM);
   const [customFilterActive, setCustomFilterActive] = useState(false);
   const hasAppliedCustomPreferenceRef = useRef(false);
   const autoNearbyAppliedRef = useRef(false);
@@ -135,10 +123,13 @@ export default function OverviewPage() {
       const custom = event as CustomEvent<StoredUserProfile>;
       setStoredProfile(custom.detail ?? {});
     };
+
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === PROFILE_STORAGE_KEY)
+      if (event.key === PROFILE_STORAGE_KEY) {
         setStoredProfile(readStoredUserProfile());
+      }
     };
+
     window.addEventListener(PROFILE_EVENT, handleProfileEvent);
     window.addEventListener("storage", handleStorage);
     return () => {
@@ -163,9 +154,7 @@ export default function OverviewPage() {
     ) => {
       if (!pref) return;
       const nextSelectAll =
-        pref.selectAll !== undefined
-          ? pref.selectAll
-          : !(pref.fuelTypes && pref.fuelTypes.length > 0);
+        pref.selectAll !== undefined ? pref.selectAll : !(pref.fuelTypes && pref.fuelTypes.length > 0);
       const nextFuelTypes = nextSelectAll ? [] : pref.fuelTypes ?? [];
       setSelectAll(nextSelectAll);
       setSelectedFuelTypes(nextFuelTypes);
@@ -173,22 +162,23 @@ export default function OverviewPage() {
       const normalizedCustomBrands =
         pref.brandNames && pref.brandNames.length > 0
           ? Array.from(
-              new Set(
-                pref.brandNames.map((n: string) => n.trim()).filter(Boolean)
+              new Set<string>(
+                pref.brandNames
+                  .map((name: string) => name.trim())
+                  .filter((name: string) => name.length > 0)
               )
             )
           : [];
 
       if (normalizedCustomBrands.length > 0) {
-        const matched = [...BRAND_SHORTCUT_LOOKUP.entries()].find(
-          ([id, brands]) => {
-            if (id === OVERVIEW_BRAND_SHORTCUT_ALL_ID) return false;
-            return arraysEqualIgnoreCase(normalizedCustomBrands, brands);
-          }
-        );
-        if (matched) {
+        const matchedShortcutEntry = [...BRAND_SHORTCUT_LOOKUP.entries()].find(([id, brands]) => {
+          if (id === OVERVIEW_BRAND_SHORTCUT_ALL_ID) return false;
+          return arraysEqualIgnoreCase(normalizedCustomBrands, brands);
+        });
+
+        if (matchedShortcutEntry) {
           setCustomBrandNames([]);
-          setActiveBrandShortcuts([matched[0]]);
+          setActiveBrandShortcuts([matchedShortcutEntry[0]]);
         } else {
           setCustomBrandNames(normalizedCustomBrands);
           setActiveBrandShortcuts([]);
@@ -198,33 +188,25 @@ export default function OverviewPage() {
         const candidateIds =
           pref.brandShortcutIds && pref.brandShortcutIds.length > 0
             ? Array.from(
-                new Set(
-                  pref.brandShortcutIds.filter((id: string) =>
-                    BRAND_SHORTCUT_LOOKUP.has(id)
-                  )
+                new Set<string>(
+                  pref.brandShortcutIds.filter((id: string) => BRAND_SHORTCUT_LOOKUP.has(id))
                 )
               )
             : [OVERVIEW_BRAND_SHORTCUT_ALL_ID];
         setActiveBrandShortcuts(
-          candidateIds.length > 0
-            ? candidateIds
-            : [OVERVIEW_BRAND_SHORTCUT_ALL_ID]
+          candidateIds.length > 0 ? candidateIds : [OVERVIEW_BRAND_SHORTCUT_ALL_ID]
         );
       }
 
       const radius =
-        typeof pref.radiusKm === "number" && pref.radiusKm > 0
-          ? pref.radiusKm
-          : DEFAULT_OVERVIEW_RADIUS_KM;
+        typeof pref.radiusKm === "number" && pref.radiusKm > 0 ? pref.radiusKm : DEFAULT_OVERVIEW_RADIUS_KM;
       setNearbyRadiusKm(radius);
 
       setCustomFilterActive(Boolean(pref.enabled));
 
-      if (notifyUser)
-        notify(
-          "Customized Filter Enabled! Change your settings in Profile Page",
-          "success"
-        );
+      if (notifyUser) {
+        notify("Customized Filter Enabled! Change your settings in Profile Page", "success");
+      }
     },
     [notify]
   );
@@ -235,6 +217,7 @@ export default function OverviewPage() {
       hasAppliedCustomPreferenceRef.current = false;
       return;
     }
+
     if (overviewPref?.enabled) {
       if (!hasAppliedCustomPreferenceRef.current) {
         applyOverviewPreference(overviewPref, { notifyUser: true });
@@ -244,12 +227,7 @@ export default function OverviewPage() {
       hasAppliedCustomPreferenceRef.current = false;
       resetToDefaultFilters();
     }
-  }, [
-    isAuthenticated,
-    overviewPref,
-    applyOverviewPreference,
-    resetToDefaultFilters,
-  ]);
+  }, [isAuthenticated, overviewPref, applyOverviewPreference, resetToDefaultFilters]);
 
   const handleCustomFilterToggle = () => {
     if (!isAuthenticated) {
@@ -260,14 +238,17 @@ export default function OverviewPage() {
       });
       return;
     }
+
     if (!overviewPref?.enabled) {
       notify("Set up and Enable the Customized Filter in Profile Page.", "info");
       return;
     }
+
     if (customFilterActive) {
       resetToDefaultFilters();
       return;
     }
+
     applyOverviewPreference(overviewPref);
     hasAppliedCustomPreferenceRef.current = true;
   };
@@ -280,12 +261,16 @@ export default function OverviewPage() {
   );
 
   const effectiveBrandCanonical = useMemo(() => {
-    if (!brandFilteringEnabled) return [] as string[];
-    if (customBrandNames.length > 0) return customBrandNames;
+    if (!brandFilteringEnabled) {
+      return [] as string[];
+    }
+    if (customBrandNames.length > 0) {
+      return customBrandNames;
+    }
     const collected = new Set<string>();
-    activeBrandShortcuts.forEach((id) =>
-      (BRAND_SHORTCUT_LOOKUP.get(id) ?? []).forEach((b) => collected.add(b))
-    );
+    activeBrandShortcuts.forEach((id) => {
+      (BRAND_SHORTCUT_LOOKUP.get(id) ?? []).forEach((brand) => collected.add(brand));
+    });
     return Array.from(collected);
   }, [activeBrandShortcuts, brandFilteringEnabled, customBrandNames]);
 
@@ -294,32 +279,19 @@ export default function OverviewPage() {
     [effectiveBrandCanonical]
   );
 
+
   const apiFuelTypes = useMemo(() => {
-    if (selectAll || !selectedFuelTypes.length) return [];
+    if (selectAll || !selectedFuelTypes.length) return []; 
     const set = new Set(selectedFuelTypes.map((t) => t.toUpperCase()));
-    if (set.has("DL")) set.add("PDL"); // DL includes PDL
+    if (set.has("DL")) set.add("PDL");                     //DL includes PDL
     return Array.from(set);
   }, [selectedFuelTypes, selectAll]);
 
-  // Gate data queries by server readiness
-  const {
-    data: globalData,
-    isLoading: isGlobalLoading,
-    isError: isGlobalError,
-    error: globalError,
-  } = useCheapestPrices(
-    apiFuelTypes,
-    brandFilteringEnabled ? effectiveBrandCanonical : [],
-    { enabled: isServerReady, retry: 0 }
-  );
-
-  const {
-    data: nearbyData,
-    isLoading: isNearbyLoading,
-    isError: isNearbyError,
-    error: nearbyError,
-  } = useNearbyStations(nearbyFilter, { enabled: isServerReady, retry: 0 });
-
+  // Data
+  const { data: globalData, isLoading: isGlobalLoading } =
+    useCheapestPrices(apiFuelTypes, brandFilteringEnabled ? effectiveBrandCanonical : []);
+  const { data: nearbyData, isLoading: isNearbyLoading } =
+    useNearbyStations(nearbyFilter);
 
   const globalPrices = useMemo<CheapestPriceResponse[]>(
     () => globalData ?? [],
@@ -333,6 +305,8 @@ export default function OverviewPage() {
     [globalPrices]
   );
 
+
+
   const nearbyPrices = useMemo(() => {
     if (!nearbyData?.stations?.length) return [] as CheapestPriceResponse[];
     return buildCheapestFromNearby(nearbyData.stations).sort((a, b) =>
@@ -344,7 +318,9 @@ export default function OverviewPage() {
   const activePrices = isNearbyMode ? nearbyPrices : sortedGlobalPrices;
 
   const brandFilteredPrices = useMemo(() => {
-    if (!brandFilteringEnabled || brandAllowedUpper.size === 0) return activePrices;
+    if (!brandFilteringEnabled || brandAllowedUpper.size === 0) {
+      return activePrices;
+    }
     return activePrices.filter((price) => {
       const canonical = price.station?.brandCanonical;
       if (!canonical) return false;
@@ -359,7 +335,8 @@ export default function OverviewPage() {
     return brandFilteredPrices.filter((p) => {
       const fuel = p.fuelType.toUpperCase();
       if (set.has(fuel)) return true;
-      if (set.has("DL") && fuel === "PDL") return true; // DL + PDL together
+      //Put DL and PDL together
+      if (set.has("DL") && fuel === "PDL") return true;
       return false;
     });
   }, [brandFilteredPrices, selectedFuelTypes, selectAll]);
@@ -423,7 +400,7 @@ export default function OverviewPage() {
     <ToggleButton
       value="customized"
       selected={customFilterActive}
-      onChange={(event) => {
+      onChange={(event, _selected) => {
         event.preventDefault();
         handleCustomFilterToggle();
       }}
@@ -446,36 +423,32 @@ export default function OverviewPage() {
           "&:hover": { bgcolor: "secondary.dark" },
         },
       }}
-    >
-      {customFilterActive ? (
-        <CheckBoxIcon fontSize="small" />
-      ) : (
-        <CheckBoxOutlineBlankIcon fontSize="small" />
-      )}
+    >{customFilterActive ? (<CheckBoxIcon fontSize="small" />) : (<CheckBoxOutlineBlankIcon fontSize="small" />)}
       Customized Filter
     </ToggleButton>
   );
 
-  // Keep nearby brands in sync with filter
   useEffect(() => {
-    if (!isNearbyMode) return;
+    if (!isNearbyMode) {
+      return;
+    }
     setNearbyFilter((prev) => {
-      if (!prev) return prev;
+      if (!prev) {
+        return prev;
+      }
       if (!brandFilteringEnabled || brandAllowedUpper.size === 0) {
-        if (!prev.brands || prev.brands.length === 0) return prev;
+        if (!prev.brands || prev.brands.length === 0) {
+          return prev;
+        }
         return { ...prev, brands: undefined };
       }
-      if (arraysEqualIgnoreCase(prev.brands, effectiveBrandCanonical)) return prev;
+      if (arraysEqualIgnoreCase(prev.brands, effectiveBrandCanonical)) {
+        return prev;
+      }
       return { ...prev, brands: effectiveBrandCanonical };
     });
-  }, [
-    brandAllowedUpper,
-    brandFilteringEnabled,
-    effectiveBrandCanonical,
-    isNearbyMode,
-  ]);
+  }, [brandAllowedUpper, brandFilteringEnabled, effectiveBrandCanonical, isNearbyMode]);
 
-  // Auto nearby when profile says so
   useEffect(() => {
     const enabled = overviewPref?.enabled ?? false;
     const radius = overviewPref?.radiusKm;
@@ -484,7 +457,10 @@ export default function OverviewPage() {
       autoNearbyAppliedRef.current = false;
       return;
     }
-    if (autoNearbyAppliedRef.current) return;
+
+    if (autoNearbyAppliedRef.current) {
+      return;
+    }
     autoNearbyAppliedRef.current = true;
 
     if (!isNearbyMode && !isLocating) {
@@ -499,50 +475,10 @@ export default function OverviewPage() {
     overviewPref?.radiusKm,
   ]);
 
-  // --- Error detection ---
-  const hasQueryError = isNearbyMode ? isNearbyError : isGlobalError;
-  const activeError = (isNearbyMode ? nearbyError : globalError) as unknown as Error | null;
-  const canShowQueryError = hasQueryError && (serverStatus === "healthy" || serverStatus === "degraded");
-
-  // server-aware loading / empty flags
-  const serverNotReady =
-    serverStatus === "unknown" ||
-    serverStatus === "waking" ||
-    serverStatus === "degraded";
-  const serverHardError =
-    serverStatus === "unreachable" || serverStatus === "backend_error";
-
-  const isLoading = serverNotReady
-    ? true
-    : isServerReady
-    ? isNearbyMode
-      ? isNearbyLoading || isLocating
-      : isGlobalLoading
-    : false;
-
-    const showEmptyState =
-    isServerReady && !hasQueryError && !isLoading && filteredPrices.length === 0;
-
-  // When Bkend comes healthy, refresh
-  useEffect(() => {
-    if (serverStatus === "healthy") {
-      qc.invalidateQueries({ queryKey: ["cheapest"] });
-      qc.invalidateQueries({ queryKey: ["nearby"] });
-    }
-  }, [serverStatus, qc]);
-
-  // retry every 5s when empty, till there is data coming
-  useEffect(() => {
-    if (isServerReady && showEmptyState) {
-      const id = setInterval(() => {
-        qc.invalidateQueries({ queryKey: ["cheapest"], refetchType: "active" });
-        if (isNearbyMode) {
-          qc.invalidateQueries({ queryKey: ["nearby"], refetchType: "active" });
-        }
-      }, 5000);
-      return () => clearInterval(id);
-    }
-  }, [isServerReady, showEmptyState, isNearbyMode, qc]);
+  const isLoading = isNearbyMode
+    ? isNearbyLoading || isLocating
+    : isGlobalLoading;
+  const showEmptyState = !isLoading && filteredPrices.length === 0;
 
   const handleSelectAllChange = useCallback(
     (next: boolean) => {
@@ -557,66 +493,16 @@ export default function OverviewPage() {
 
   return (
     <Container maxWidth={false} sx={{ px: { xs: 2, sm: 3, md: 4 }, pb: 6 }}>
+    
       <Typography variant="h5" fontWeight={600} gutterBottom>
-        {customFilterActive
-          ? "Lowest Fuel Prices Around You"
-          : "Lowest Fuel Prices in NSW"}
+        {customFilterActive ? "Lowest Fuel Prices Around You" : "Lowest Fuel Prices in NSW"}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        {customFilterActive
-          ? "Welcome back! Your customized filter is enabled, by you, for you."
-          : "Select fuel types to view the cheapest stations across NSW. Data refreshes twice daily."}
+      {customFilterActive ? "Welcome back! Your customized filter is enabled, by you, for you." : "Select fuel types to view the cheapest stations across NSW. Data refreshes twice daily."}
+        
       </Typography>
 
-      {/* Server status banner */}
-      {serverStatus !== "healthy" && (
-        <Box sx={{ mb: 2 }}>
-          {(serverStatus === "waking" || serverStatus === "degraded") && (
-            <WakeBanner serverStatus={serverStatus} />
-          )}
-
-          {serverStatus === "unknown" && (
-            <Alert severity="info">Checking backend status…</Alert>
-          )}
-
-          {serverStatus === "unreachable" && (
-            <Alert
-              severity="error"
-              action={
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1, pr: 1 }}>
-                  <CircularProgress size={16} thickness={5} />
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    Retrying…
-                  </Typography>
-                </Box>
-              }
-            >
-              <AlertTitle>Server not responding</AlertTitle>
-              The server is starting up or temporarily unavailable. Retrying automatically…
-            </Alert>
-          )}
-
-          {serverStatus === "backend_error" && (
-            <Alert
-              severity="error"
-              action={
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1, pr: 1 }}>
-                  <CircularProgress size={16} thickness={5} />
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    Retrying…
-                  </Typography>
-                </Box>
-              }
-            >
-              <AlertTitle>Server error</AlertTitle>
-              The server returned an error{lastHttpCode ? ` (HTTP ${lastHttpCode})` : ""}. Retrying…
-            </Alert>
-          )}
-        </Box>
-      )}
-
-
-      {/* Filter + Location */}
+      {/* Filter + Location buttons */}
       <Stack
         direction={isMobile ? "column" : "row"}
         spacing={1.5}
@@ -638,82 +524,82 @@ export default function OverviewPage() {
           value={activeBrandShortcuts}
           onChange={handleBrandShortcutsChange}
           allOptionId={OVERVIEW_BRAND_SHORTCUT_ALL_ID}
-          closeIconIds={OVERVIEW_BRAND_SHORTCUTS.map((opt) => opt.id).filter(
-            (id) => id !== OVERVIEW_BRAND_SHORTCUT_ALL_ID
-          )}
+          closeIconIds={OVERVIEW_BRAND_SHORTCUTS.map((opt) => opt.id).filter((id) => id !== OVERVIEW_BRAND_SHORTCUT_ALL_ID)}
           size="small"
           allowEmptySelection
         />
 
-        <FormControlLabel
-          control={
-            <Switch
-              checked={isNearbyMode}
-              onChange={handleNearbyToggle}
-              color="primary"
-              disabled={isLocating}
-            />
-          }
-          label={
-            <Box display="flex" alignItems="center">
-              {isNearbyMode ? (
-                <MyLocationIcon
-                  sx={{
-                    fontSize: 20,
-                    mr: 1,
-                    color: "primary.main",
-                    transition: "color 0.2s ease",
-                  }}
-                />
-              ) : (
-                <LocationDisabledIcon
-                  sx={{
-                    fontSize: 20,
-                    mr: 1,
-                    color: "text.secondary",
-                    transition: "color 0.2s ease",
-                  }}
-                />
-              )}
-              <Typography
-                sx={{
-                  fontWeight: isNearbyMode ? 700 : 400,
-                  color: isNearbyMode ? "primary.main" : "text.primary",
-                  transition: "color 0.2s ease, font-weight 0.2s ease",
-                }}
-              >
-                {isLocating ? "Locating..." : "Check by My Location"}
-              </Typography>
-            </Box>
-          }
+<FormControlLabel
+  control={
+    <Switch
+      checked={isNearbyMode}
+      onChange={handleNearbyToggle}
+      color="primary"
+      disabled={isLocating}
+    />
+  }
+  label={
+    <Box display="flex" alignItems="center">
+      {/* 左侧图标 */}
+      {isNearbyMode ? (
+        <MyLocationIcon
+          sx={{
+            fontSize: 20,
+            mr: 1,
+            color: "primary.main",
+            transition: "color 0.2s ease",
+          }}
         />
+      ) : (
+        <LocationDisabledIcon
+          sx={{
+            fontSize: 20,
+            mr: 1,
+            color: "text.secondary",
+            transition: "color 0.2s ease",
+          }}
+        />
+      )}
+
+      {/* 文字部分 */}
+      <Typography
+        sx={{
+          fontWeight: isNearbyMode ? 700 : 400,
+          color: isNearbyMode ? "primary.main" : "text.primary",
+          transition: "color 0.2s ease, font-weight 0.2s ease",
+        }}
+      >
+        {isLocating ? "Locating..." : "Check by My Location"}
+      </Typography>
+    </Box>
+  }
+/>
       </Stack>
 
       {isNearbyMode && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Displaying the lowest price for each fuel within {nearbyRadiusKm} km of
-          your current location.
+          Displaying the lowest price for each fuel within {nearbyRadiusKm} km
+          of your current location.
         </Typography>
       )}
 
-      {canShowQueryError && (
-        <Alert severity="error" sx={{ my: 2 }}>
-          Request failed even though backend looks healthy.
-          <Box component="span" sx={{ display: "block", mt: 0.5, opacity: 0.8 }}>
-            {activeError?.message ?? String(activeError ?? "")}
-          </Box>
-          It may still be waking up — retrying automatically…
-        </Alert>
+      {isLoading && (
+        <Stack alignItems="center" sx={{ py: 6 }}>
+          <CircularProgress />
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+            Loading...
+          </Typography>
+        </Stack>
       )}
 
-      {/* Empty state (only when server ready) */}
-      {showEmptyState && (
+      {!isLoading && showEmptyState && (
         <Alert severity="info" sx={{ my: 2 }}>
           No data available. Try selecting different fuel types.
         </Alert>
       )}
 
-      {!serverHardError && (isLoading || !showEmptyState) && (
+      {/* Cards */}
+      {!isLoading && !showEmptyState && (
         <Box
           sx={{
             display: "grid",
@@ -723,23 +609,21 @@ export default function OverviewPage() {
               sm: "repeat(2, 1fr)",
               md: "repeat(3, 1fr)",
               lg: "repeat(3, 1fr)",
-              xl: "repeat(4, 1fr)",
+              xl: "repeat(4, 1fr)"
             },
           }}
         >
-          {isLoading ? (
-            <Box>
-              <PriceCardSkeleton />
+          {filteredPrices.map((price) => (
+            <Box key={price.fuelType}>
+              <PriceCard
+                price={price}
+              />
             </Box>
-          ) : (
-            filteredPrices.map((price) => (
-              <Box key={price.fuelType}>
-                <PriceCard price={price} />
-              </Box>
-            ))
-          )}
+          ))}
         </Box>
       )}
     </Container>
   );
 }
+
+

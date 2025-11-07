@@ -752,7 +752,57 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+
 //await RepresentativeCoordinateSeeder.SeedAsync(app.Services, app.Logger);
+
+// Liveness: always quick and cheap; do not touch DB.
+
+////================Real Sever Start===============
+app.MapGet("/healthz", () =>
+
+{
+    return Results.Json(new
+    {
+        ok = true,
+        version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown",
+        startedAt = DateTimeOffset.UtcNow
+    });
+});
+
+//=================Server Waking Up sumilator====================
+//app.MapGet("/healthz", () =>
+//{
+//    return Results.Json(new
+//    {
+//        status = "waking",
+//        message = "Backend starting up..."
+//    });
+//});
+
+
+//==============================================================================
+// Readiness: ensure critical dependencies (e.g., DB) are reachable.
+app.MapGet("/readyz", async (FuelFinderDbContext db, CancellationToken ct) =>
+{
+    try
+    {
+        var can = await db.Database.CanConnectAsync(ct);
+        if (!can) return Results.StatusCode(503);
+
+
+        return Results.Json(new
+        {
+            ok = true,
+            db = true,
+            version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown"
+        });
+    }
+    catch (Exception)
+    {
+        //503 if backend alive but db not ready
+        return Results.StatusCode(503);
+    }
+});
 
 app.Run();
 

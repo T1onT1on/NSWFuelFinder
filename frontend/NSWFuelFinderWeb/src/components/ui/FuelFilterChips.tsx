@@ -129,7 +129,7 @@ export default function FuelFilterChips({
 
       {/* 提示始终展示 */}
       <Typography variant="caption" color="text.secondary">
-        I want to check only...
+        Select the Fuels and Brands you want to check
       </Typography>
 
       {/* 过滤按钮区：彩色，过滤模式下高亮 */}

@@ -6,15 +6,39 @@ import type {
   NearbyStationsResponse,
 } from "../types";
 
-const appendSearchParams = (params: URLSearchParams, key: string, value: string | number | undefined | null) => {
-  if (value === undefined || value === null || value === "") {
-    return;
-  }
+type UseQueryExtras = {
+  enabled?: boolean;
+  staleTime?: number;
+  gcTime?: number;
+  refetchOnMount?: boolean | "always";
+  refetchOnReconnect?: boolean | "always";
+  refetchOnWindowFocus?: boolean | "always";
+  refetchInterval?: number | false;
+  retry?: boolean | number;
+};
+
+
+const appendSearchParams = (
+  params: URLSearchParams,
+  key: string,
+  value: string | number | undefined | null
+) => {
+  if (value === undefined || value === null || value === "") return;
   params.append(key, String(value));
 };
 
-export const useCheapestPrices = (fuelTypes?: string[], brands?: string[]) => {
+/**
+ * Cheapest prices across NSW (optionally filtered by fuel types & brands)
+ * Now supports options.enabled to defer until backend is ready.
+ */
+export const useCheapestPrices = (
+  fuelTypes?: string[],
+  brands?: string[],
+  options?: UseQueryExtras
+) => {
   const client = useApiClient();
+  const enabled = options?.enabled ?? true;
+
   return useQuery<CheapestPriceResponse[]>({
     queryKey: [
       "cheapest",
@@ -31,12 +55,18 @@ export const useCheapestPrices = (fuelTypes?: string[], brands?: string[]) => {
         brands.forEach((brand) => params.append("brands", brand));
       }
       const queryString = params.toString();
-      if (queryString) {
-        url = `${url}?${queryString}`;
-      }
+      if (queryString) url = `${url}?${queryString}`;
       const { data } = await client.get<CheapestPriceResponse[]>(url);
       return data;
     },
+    enabled,
+    retry: options?.retry ?? 0,
+    staleTime: options?.staleTime ?? 60_000,
+    gcTime: options?.gcTime ?? 5 * 60 * 1000,
+    refetchOnMount: options?.refetchOnMount ?? "always",
+    refetchOnReconnect: options?.refetchOnReconnect ?? "always",
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? "always",
+    refetchInterval: options?.refetchInterval ?? false,
   });
 };
 
@@ -52,8 +82,17 @@ export type NearbyFilter = {
   sortOrder?: string;
 };
 
-export const useNearbyStations = (filter: NearbyFilter | null) => {
+/**
+ * Nearby stations query (requires a filter).
+ * Now supports options.enabled; effective enabled = Boolean(filter) && options.enabled.
+ */
+export const useNearbyStations = (
+  filter: NearbyFilter | null,
+  options?: UseQueryExtras
+) => {
   const client = useApiClient();
+  const enabled = (options?.enabled ?? true) && Boolean(filter);
+
   return useQuery<NearbyStationsResponse>({
     queryKey: ["nearby", filter],
     queryFn: async () => {
@@ -80,22 +119,31 @@ export const useNearbyStations = (filter: NearbyFilter | null) => {
       const { data } = await client.get<NearbyStationsResponse>(url);
       return data;
     },
-    enabled: Boolean(filter),
-    staleTime: 0,
-    gcTime: 5 * 60 * 1000,
-    refetchOnMount: "always",
-    refetchOnReconnect: "always",
-    refetchOnWindowFocus: "always",
-    refetchInterval: filter ? 60 * 1000 : false,
+    enabled,
+    retry: options?.retry ?? 0,
+    staleTime: options?.staleTime ?? 0,
+    gcTime: options?.gcTime ?? 5 * 60 * 1000,
+    refetchOnMount: options?.refetchOnMount ?? "always",
+    refetchOnReconnect: options?.refetchOnReconnect ?? "always",
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? "always",
+    // Only poll when actually enabled and filter exists
+    refetchInterval: enabled ? (options?.refetchInterval ?? 60 * 1000) : false,
   });
 };
 
+/**
+ * Station price trends.
+ * Optionally accepts options to gate by server readiness.
+ */
 export const useStationTrends = (
   stationCode: string | undefined,
   fuelType?: string,
-  periodDays: number = 7
+  periodDays: number = 7,
+  options?: UseQueryExtras
 ) => {
   const client = useApiClient();
+  const enabled = (options?.enabled ?? true) && Boolean(stationCode);
+
   return useQuery<FuelPriceTrendResponse[]>({
     queryKey: ["trend", stationCode, fuelType, periodDays],
     queryFn: async () => {
@@ -107,6 +155,9 @@ export const useStationTrends = (
       const { data } = await client.get<FuelPriceTrendResponse[]>(url);
       return data;
     },
-    enabled: Boolean(stationCode),
+    enabled,
+    retry: options?.retry ?? 0,
+    staleTime: options?.staleTime ?? 60_000,
+    gcTime: options?.gcTime ?? 5 * 60 * 1000,
   });
 };

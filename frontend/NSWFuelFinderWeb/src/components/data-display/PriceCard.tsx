@@ -148,7 +148,8 @@ export default function PriceCard({
   };
 
   return (
-    <Card variant="outlined" sx={{ minHeight: 220, display: "flex", flexDirection: "column" }}>
+    <Card //variant="outlined" 
+    sx={{ minHeight: 220, display: "flex", flexDirection: "column" }}>
       <CardHeader
         title={
           <Typography variant="subtitle1" sx={{ color: contrast, fontWeight: 700 }}>
@@ -235,7 +236,7 @@ export default function PriceCard({
               station: toNearbyStation(price),
             }}
           >
-            View details
+            View Details
           </Button>
         </Box>
       </CardContent>
