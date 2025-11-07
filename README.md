@@ -3,7 +3,7 @@
 
 ![.NET](https://img.shields.io/badge/.NET-8.0-blue?logo=dotnet)
 ![React](https://img.shields.io/badge/React-18-61dafb?logo=react)
-![SQLite](https://img.shields.io/badge/SQLite-3-lightgrey?logo=sqlite)
+![Postgres]([https://img.shields.io/badge/SQLite-3-lightgrey?logo=sqlite](https://img.shields.io/badge/PostgreSQL-316192?logo=postgresql&logoColor=white))
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
