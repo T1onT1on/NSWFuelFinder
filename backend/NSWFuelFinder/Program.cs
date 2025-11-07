@@ -160,10 +160,11 @@ if (app.Environment.IsDevelopment())
 
 app.UseForwardedHeaders();
 
-if (!app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-}
+//if (!app.Environment.IsDevelopment())
+//{
+//    app.UseHttpsRedirection();
+//}
+
 app.UseCors("AllowLocalhost");
 app.UseCookiePolicy(new CookiePolicyOptions
 {
