@@ -21,6 +21,7 @@ import {
 import Grid from "@mui/material/Grid"; // v7 official Grid API
 import dayjs from "dayjs";
 
+import { useLastSync } from "../hooks/queries";
 import { useNearbyStations, useStationTrends } from "../hooks/queries";
 import { useApiClient } from "../hooks/useApiClient";
 import type { NearbyFuelStation, NearbyStationsResponse } from "../types";
@@ -81,6 +82,16 @@ export const StationDetailsPage: React.FC = () => {
       ? { latitude: -33.8688, longitude: 151.2093, radiusKm: 50 }
       : null
   );
+
+  const { data: lastSync } = useLastSync();
+  const lastSyncTime =
+    lastSync?.lastSyncUnixMs
+      ? dayjs(lastSync.lastSyncUnixMs)
+      : lastSync?.lastSyncSydney
+      ? dayjs(lastSync.lastSyncSydney)
+      : lastSync?.lastSyncUtc
+      ? dayjs(lastSync.lastSyncUtc)
+      : null;
 
   const seededStation = useMemo(() => {
     if (state?.station) return state.station;
@@ -174,11 +185,10 @@ export const StationDetailsPage: React.FC = () => {
                         const dollarsValue = `${(price.centsPerLitre / 100).toFixed(3)}${
                           price.unit ?? "$/L"
                         }`;
-                        const title = price.lastUpdated
-                          ? `${price.fuelType}: ${dollarsValue} (updated ${dayjs(
-                              price.lastUpdated
-                            ).format("YYYY-MM-DD HH:mm")})`
-                          : `${price.fuelType}: ${dollarsValue}`;
+                        const title = lastSyncTime
+                        ? `${price.fuelType}: ${dollarsValue} (Last Sync ${lastSyncTime.format("YYYY-MM-DD HH:mm")})`
+                        : `${price.fuelType}: ${dollarsValue}`;
+
                         const bg = getFuelColor(price.fuelType);
                         // Simple readable text color (yellow → black, others → white)
                         const fg = bg.toLowerCase().includes("fadb14") ? "#000" : "#fff";
@@ -186,12 +196,9 @@ export const StationDetailsPage: React.FC = () => {
                         return (
                           <Tooltip title={title} key={`${price.fuelType}-${price.centsPerLitre}`}>
                             <Chip
-                              label={`${price.fuelType}: ${centsValue}`}
-                              sx={{
-                                borderRadius: 1,
-                                bgcolor: bg,
-                                color: fg,
-                              }}
+                            // label={`${price.fuelType}: ${centsValue} (Last Sync ${lastSyncTime?.format("YYYY-MM-DD HH:mm") ?? "—"})`}
+                            label={`${price.fuelType}: ${centsValue}`}
+                            sx={{ borderRadius: 1, bgcolor: bg, color: fg }}
                             />
                           </Tooltip>
                         );

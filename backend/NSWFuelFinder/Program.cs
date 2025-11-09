@@ -15,6 +15,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Caching.Memory;
+
 
 const double DefaultOverviewRadiusKm = 5d;
 
@@ -804,6 +806,66 @@ app.MapGet("/readyz", async (FuelFinderDbContext db, CancellationToken ct) =>
         return Results.StatusCode(503);
     }
 });
+
+// ============ Add Last Sync Endpoint =============
+
+app.MapGet("/api/system/last-sync", async Task<IResult> (
+    IMemoryCache cache,
+    FuelFinderDbContext db,
+    CancellationToken ct) =>
+{
+    // 1) Try cache first (fast path, set by FuelDataSyncService)
+    if (cache.TryGetValue(FuelDataSyncService.LastFuelSyncUtcCacheKey, out DateTimeOffset lastUtc))
+    {
+        var tz = FuelDataSyncService_GetNswTimeZoneSafe();
+        var local = TimeZoneInfo.ConvertTime(lastUtc, tz);
+        return Results.Json(new
+        {
+            hasValue = true,
+            source = "cache",
+            lastSyncUtc = lastUtc.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
+            lastSyncSydney = local.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+            lastSyncUnixMs = lastUtc.ToUnixTimeMilliseconds()
+        });
+    }
+
+    // 2) Fallback to DB: MAX(Stations.SyncedAtUtc)
+    var maxUtc = await db.Stations
+        .AsNoTracking()
+        .Select(s => s.SyncedAtUtc)
+        .DefaultIfEmpty()
+        .MaxAsync(ct);
+
+    if (maxUtc == default)
+        return Results.Json(new { hasValue = false });
+
+    {
+        var tz = FuelDataSyncService_GetNswTimeZoneSafe();
+        var local = TimeZoneInfo.ConvertTime(maxUtc, tz);
+        return Results.Json(new
+        {
+            hasValue = true,
+            source = "database",
+            lastSyncUtc = maxUtc.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
+            lastSyncSydney = local.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+            lastSyncUnixMs = maxUtc.ToUnixTimeMilliseconds()
+        });
+    }
+});
+
+// Helper to mirror service time zone logic
+static TimeZoneInfo FuelDataSyncService_GetNswTimeZoneSafe()
+{
+    try { return TimeZoneInfo.FindSystemTimeZoneById("AUS Eastern Standard Time"); }
+    catch (TimeZoneNotFoundException)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney"); }
+        catch { return TimeZoneInfo.Utc; }
+    }
+    catch (InvalidTimeZoneException) { return TimeZoneInfo.Utc; }
+}
+
+// =================================================
 
 app.Run();
 

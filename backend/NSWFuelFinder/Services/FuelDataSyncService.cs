@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NSWFuelFinder.Data;
 using NSWFuelFinder.Models.FuelApi;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace NSWFuelFinder.Services;
 
@@ -14,37 +15,122 @@ public sealed class FuelDataSyncService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFuelApiClient _fuelApiClient;
     private readonly ILogger<FuelDataSyncService> _logger;
+    private readonly IMemoryCache _cache;
+
+    // Cache key for fast last-sync lookups via /api/system/last-sync
+    public const string LastFuelSyncUtcCacheKey = "FuelSync:LastUtc";
 
     public FuelDataSyncService(
         IServiceScopeFactory scopeFactory,
         IFuelApiClient fuelApiClient,
-        ILogger<FuelDataSyncService> logger)
+        ILogger<FuelDataSyncService> logger,
+        IMemoryCache cache)
     {
         _scopeFactory = scopeFactory;
         _fuelApiClient = fuelApiClient;
         _logger = logger;
+        _cache = cache;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Fuel data sync service starting.");
 
+        // Print last sync immediately at service start (read from DB)
+        try
+        {
+            await using var scope0 = _scopeFactory.CreateAsyncScope();
+            var db0 = scope0.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
+            var last = await db0.Stations.AsNoTracking()
+                .Select(s => s.SyncedAtUtc)
+                .DefaultIfEmpty()
+                .MaxAsync(stoppingToken);
+
+            if (last != default)
+            {
+                var tz0 = GetNswTimeZone();
+                var local0 = TimeZoneInfo.ConvertTime(last, tz0);
+                _logger.LogInformation("Startup: last fuel sync in DB => {Utc} UTC / {Local} Sydney",
+                    last.ToString("yyyy-MM-dd HH:mm:ss"),
+                    local0.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+            }
+            else
+            {
+                _logger.LogInformation("Startup: no previous fuel sync found in DB.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Startup: failed to read last sync timestamp.");
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var syncStarted = DateTimeOffset.UtcNow;
             try
             {
-                var (shouldSynchronise, lastSyncUtc) = await EvaluateSyncRequirementAsync(stoppingToken).ConfigureAwait(false);
-                LogSyncCheckpoint(lastSyncUtc, shouldSynchronise);
+                var (shouldSynchronise, lastSyncUtc, reason) =
+                    await EvaluateSyncRequirementAsync(stoppingToken).ConfigureAwait(false);
+
+                LogSyncCheckpoint(lastSyncUtc, shouldSynchronise, reason);
 
                 if (shouldSynchronise)
                 {
                     await SynchroniseAsync(stoppingToken).ConfigureAwait(false);
-                    _logger.LogInformation("Fuel data synchronisation completed at {Timestamp}.", syncStarted);
+
+                    // Print the new last-sync time (read back from DB for accuracy)
+                    try
+                    {
+                        await using var scope1 = _scopeFactory.CreateAsyncScope();
+                        var db1 = scope1.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
+                        var lastNow = await db1.Stations.AsNoTracking()
+                            .Select(s => s.SyncedAtUtc)
+                            .DefaultIfEmpty()
+                            .MaxAsync(stoppingToken);
+
+                        var tz1 = GetNswTimeZone();
+                        var local1 = TimeZoneInfo.ConvertTime(lastNow, tz1);
+                        _logger.LogInformation("Sync completed: last fuel sync is now => {Utc} UTC / {Local} Sydney",
+                            lastNow.ToString("yyyy-MM-dd HH:mm:ss"),
+                            local1.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to read back last sync timestamp after completion.");
+                    }
                 }
                 else
                 {
-                    _logger.LogInformation("Skipping fuel data synchronisation at {Timestamp}; data refreshed within the last 12 hours.", syncStarted);
+                    var tzSkip = GetNswTimeZone();
+                    var lastLocal = lastSyncUtc.HasValue
+                        ? TimeZoneInfo.ConvertTime(lastSyncUtc.Value, tzSkip)
+                        : (DateTimeOffset?)null;
+
+                    _logger.LogInformation(
+                        "Skip: not running at this slot ({Reason}). Last sync => {LastUtc} UTC / {LastLocal} Sydney",
+                        reason,
+                        lastSyncUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A",
+                        lastLocal?.ToString("yyyy-MM-dd HH:mm:ss zzz") ?? "N/A");
+                }
+
+                // === Always log next scheduled check ===
+                var delay = CalculateDelayUntilNextRun(syncStarted);
+                var nextAtUtc = syncStarted + delay;
+                var tz = GetNswTimeZone();
+                var nextAtLocal = TimeZoneInfo.ConvertTime(nextAtUtc, tz);
+                _logger.LogInformation(
+                    "Next sync check scheduled at => {NextUtc} UTC / {NextLocal} Sydney (in {Delay}).",
+                    nextAtUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+                    nextAtLocal.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+                    delay);
+
+                try
+                {
+                    await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -53,24 +139,20 @@ public sealed class FuelDataSyncService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Fuel data synchronisation failed at {Timestamp}.", syncStarted);
-            }
-
-            var delay = CalculateDelayUntilNextRun(syncStarted);
-            try
-            {
-                await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
+                _logger.LogError(ex, "Fuel data synchronisation loop failed at {Timestamp}.", syncStarted);
+                // Backoff a little to avoid tight error loops
+                try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); } catch { /* ignored */ }
             }
         }
 
         _logger.LogInformation("Fuel data sync service stopping.");
     }
 
-    private async Task<(bool ShouldSynchronise, DateTimeOffset? LastSyncUtc)> EvaluateSyncRequirementAsync(CancellationToken cancellationToken)
+    // Decide whether to run now:
+    // - Only run inside the scheduled local-hour "window" (e.g., HH:00 ~ HH:00+WindowAfterMinutes)
+    // - And respect a small debounce to avoid double-runs on close restarts
+    private async Task<(bool ShouldSynchronise, DateTimeOffset? LastSyncUtc, string Reason)>
+        EvaluateSyncRequirementAsync(CancellationToken cancellationToken)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
@@ -81,30 +163,37 @@ public sealed class FuelDataSyncService : BackgroundService
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        if (syncTimestamps.Count == 0)
-        {
-            return (true, null);
-        }
+        var hasAny = syncTimestamps.Count > 0;
+        var lastSync = hasAny ? syncTimestamps.Max() : (DateTimeOffset?)null;
 
-        // OrderBy on DateTimeOffset is not translated by the SQLite provider, so evaluate on the client.
-        var lastSync = syncTimestamps.Max();
-        var timeSinceLastSync = DateTimeOffset.UtcNow - lastSync;
-        return (timeSinceLastSync >= TimeSpan.FromHours(12), lastSync);
+        // First-run: if no data yet，允许立即跑（不受窗口限制）
+        if (!hasAny)
+            return (true, null, "first-run");
+
+        // Check the scheduled window in local time
+        var nowUtc = DateTimeOffset.UtcNow;
+        if (!IsInScheduledLocalWindow(nowUtc))
+            return (false, lastSync, "outside-schedule-window");
+
+        // Debounce to avoid double run around restarts
+        var timeSinceLastSync = nowUtc - lastSync!.Value;
+        if (timeSinceLastSync < MinIntervalBetweenSyncs)
+            return (false, lastSync, "debounced-too-soon");
+
+        return (true, lastSync, "scheduled-window");
     }
 
-    private void LogSyncCheckpoint(DateTimeOffset? lastSyncUtc, bool willSynchronise)
+    private void LogSyncCheckpoint(DateTimeOffset? lastSyncUtc, bool willSynchronise, string reason)
     {
         var tz = GetNswTimeZone();
         var utcText = lastSyncUtc?.ToString("yyyy-MM-dd HH:mm:ss 'UTC'") ?? "never";
-        var aestText = lastSyncUtc.HasValue
+        var localText = lastSyncUtc.HasValue
             ? TimeZoneInfo.ConvertTime(lastSyncUtc.Value, tz).ToString("yyyy-MM-dd HH:mm:ss zzz")
             : "N/A";
 
         _logger.LogInformation(
-            "Fuel data sync checkpoint. Last API fetch (UTC): {LastSyncUtc}. Last API fetch (AEST): {LastSyncAest}. Refresh required: {ShouldSynchronise}.",
-            utcText,
-            aestText,
-            willSynchronise);
+            "Checkpoint: last full-sync => {LastUtc} / {LastLocal}. Will run this slot: {WillRun}. Reason={Reason}",
+            utcText, localText, willSynchronise, reason);
     }
 
     private async Task SynchroniseAsync(CancellationToken cancellationToken)
@@ -153,9 +242,24 @@ public sealed class FuelDataSyncService : BackgroundService
 
             await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-            _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.", historyEntries.Count, syncTimestamp);
+            _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.",
+                historyEntries.Count, syncTimestamp);
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+            // Persist the last full-sync timestamp to memory cache for quick reads.
+            _cache.Set(LastFuelSyncUtcCacheKey, syncTimestamp, new MemoryCacheEntryOptions
+            {
+                // Cache for a day; it will be refreshed on each successful sync anyway.
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(1)
+            });
+
+            // Log both UTC and Sydney-local for debugging/observability.
+            var tz = GetNswTimeZone();
+            var local = TimeZoneInfo.ConvertTime(syncTimestamp, tz);
+            _logger.LogInformation("Last fuel sync set. UTC={Utc}, SydneyLocal={Local}.",
+                syncTimestamp.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
+                local.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         }).ConfigureAwait(false);
     }
 
@@ -200,24 +304,54 @@ public sealed class FuelDataSyncService : BackgroundService
         };
     }
 
+    // Compute the delay to the next scheduled local hour (Australia/Sydney).
     private static TimeSpan CalculateDelayUntilNextRun(DateTimeOffset fromTimestamp)
     {
         var tz = GetNswTimeZone();
         var localNow = TimeZoneInfo.ConvertTime(fromTimestamp, tz);
 
-        DateTime targetLocal;
-        if (localNow.Hour < 12)
+        DateTime? nextLocal = null;
+        foreach (var h in SyncHoursLocal.OrderBy(x => x))
         {
-            targetLocal = new DateTime(localNow.Year, localNow.Month, localNow.Day, 12, 0, 0);
-        }
-        else
-        {
-            targetLocal = new DateTime(localNow.Year, localNow.Month, localNow.Day, 0, 0, 0).AddDays(1);
+            var candidate = new DateTime(localNow.Year, localNow.Month, localNow.Day, h, 0, 0, DateTimeKind.Unspecified);
+            if (candidate > localNow)
+            {
+                nextLocal = candidate;
+                break;
+            }
         }
 
-        var targetUtc = TimeZoneInfo.ConvertTimeToUtc(targetLocal, tz);
-        var delay = targetUtc - fromTimestamp.UtcDateTime;
-        return delay > TimeSpan.Zero ? delay : TimeSpan.FromHours(12);
+        if (nextLocal is null)
+        {
+            var firstHour = SyncHoursLocal.OrderBy(x => x).First();
+            nextLocal = new DateTime(localNow.Year, localNow.Month, localNow.Day, firstHour, 0, 0, DateTimeKind.Unspecified)
+                .AddDays(1);
+        }
+
+        var nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal.Value, tz);
+        var delay = nextUtc - fromTimestamp.UtcDateTime;
+
+        // Safety: if due time is somehow in the past (DST edge cases), wait a small default.
+        if (delay <= TimeSpan.Zero)
+            delay = TimeSpan.FromMinutes(1);
+
+        return delay;
+    }
+
+    // True only when now (local time) falls within [HH:00, HH:00+WindowAfter) for a scheduled HH
+    private static bool IsInScheduledLocalWindow(DateTimeOffset nowUtc)
+    {
+        var tz = GetNswTimeZone();
+        var local = TimeZoneInfo.ConvertTime(nowUtc, tz);
+        var hour = local.Hour;
+        var minute = local.Minute;
+
+        // must be one of scheduled hours
+        if (!SyncHoursLocalSet.Contains(hour))
+            return false;
+
+        // within window after the hour
+        return minute >= 0 && minute < WindowAfterMinutes;
     }
 
     private static TimeZoneInfo GetNswTimeZone()
@@ -378,6 +512,7 @@ public sealed class FuelDataSyncService : BackgroundService
     private static readonly Regex StatePostcodeRegex = new(@"\b(?<state>ACT|NSW|VIC|QLD|SA|WA|TAS|NT)\s+(?<postcode>\d{4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex StateOnlyRegex = new(@"\b(ACT|NSW|VIC|QLD|SA|WA|TAS|NT)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PostcodeOnlyRegex = new(@"\b\d{4}\b", RegexOptions.Compiled);
+
     private static readonly HashSet<string> RoadTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "RD", "ROAD", "ST", "STREET", "AVE", "AVENUE", "HWY", "HIGHWAY",
@@ -385,4 +520,14 @@ public sealed class FuelDataSyncService : BackgroundService
         "CCT", "CRES", "CRESCENT", "PL", "PLACE", "PKWY", "PARKWAY", "TER", "TERRACE",
         "ESP", "ESPLANADE", "MTWY", "MOTORWAY"
     };
+
+    // Sydney-local hours to run the sync job.
+    private static readonly int[] SyncHoursLocal = new[] { 2, 6, 8, 10, 12, 14, 16, 18, 20, 22 };
+    private static readonly HashSet<int> SyncHoursLocalSet = SyncHoursLocal.ToHashSet();
+
+    // Window length after a scheduled hour (e.g., allow HH:00 ~ HH:00+10m to run)
+    private const int WindowAfterMinutes = 10;
+
+    // Small debounce window to avoid double-runs if the host re-schedules closely.
+    private static readonly TimeSpan MinIntervalBetweenSyncs = TimeSpan.FromMinutes(15);
 }

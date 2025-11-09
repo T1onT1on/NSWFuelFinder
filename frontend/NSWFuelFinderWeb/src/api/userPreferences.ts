@@ -1,3 +1,4 @@
+// src/api/userPreferences.ts
 import { apiClient } from "./client";
 
 export type OverviewFilterSettingsDto = {
@@ -26,12 +27,30 @@ export type UpdatePreferencesRequest = {
   overviewFilter?: OverviewFilterSettingsDto | null;
 };
 
-export const getUserPreferences = async () => {
-  const { data } = await apiClient.get<UserPreferencesResponse>("/api/users/me/preferences");
+
+export const getUserPreferences = async (accessToken?: string) => {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const { data } = await apiClient.get<UserPreferencesResponse>(
+    "/api/users/me/preferences",
+    { headers }
+  );
   return data;
 };
 
-export const updateUserPreferences = async (payload: UpdatePreferencesRequest) => {
-  const { data } = await apiClient.put<UserPreferencesResponse>("/api/users/me/preferences", payload);
+
+export const updateUserPreferences = async (
+  payload: UpdatePreferencesRequest,
+  accessToken?: string
+) => {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const { data } = await apiClient.put<UserPreferencesResponse>(
+    "/api/users/me/preferences",
+    payload,
+    { headers }
+  );
   return data;
 };

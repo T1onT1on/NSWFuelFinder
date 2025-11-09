@@ -1,7 +1,8 @@
 // src/components/tables/StationsDataGrid.tsx
 import * as React from "react";
 import { Link as RouterLink } from "react-router-dom";
-import dayjs from "dayjs";
+import dayjs, { type Dayjs } from "dayjs";
+
 import {
   Box,
   Chip,
@@ -20,6 +21,7 @@ import {
 
 import type { NearbyFuelStation, StationFuelPrice } from "../../types";
 import { getFuelColor, compareFuelTypes } from "../../utils/fuelColors";
+import { useLastSync } from "../../hooks/queries";
 
 type Props = {
   data: NearbyFuelStation[];
@@ -35,14 +37,14 @@ type RowParam = { row: NearbyFuelStation; value?: unknown };
 
 const formatVolumeLabel = (value: number) => Number(value.toFixed(2)).toString();
 
-const renderPriceChip = (price: StationFuelPrice) => {
+const renderPriceChip = (price: StationFuelPrice, lastSyncTime: Dayjs | null) => {
   const cents = price.centsPerLitre.toFixed(1);
   const dollars = `${(price.centsPerLitre / 100).toFixed(3)}${price.unit ?? "$/L"}`;
-  const title = price.lastUpdated
-    ? `${price.fuelType}: ${dollars} (updated ${dayjs(price.lastUpdated).format(
-        "YYYY-MM-DD HH:mm"
-      )})`
+
+  const title = lastSyncTime
+    ? `${price.fuelType}: ${dollars} (Last Sync ${lastSyncTime.format("YYYY-MM-DD HH:mm")})`
     : `${price.fuelType}: ${dollars}`;
+
   const bg = getFuelColor(price.fuelType);
 
   return (
@@ -115,6 +117,16 @@ export default function StationsDataGrid({
   const smDown = useMediaQuery(theme.breakpoints.down("sm"));
   const mdDown = useMediaQuery(theme.breakpoints.down("md"));
 
+  const { data: lastSync } = useLastSync();
+  const lastSyncTime: Dayjs | null =
+    lastSync?.lastSyncUnixMs
+      ? dayjs(lastSync.lastSyncUnixMs)
+      : lastSync?.lastSyncSydney
+      ? dayjs(lastSync.lastSyncSydney)
+      : lastSync?.lastSyncUtc
+      ? dayjs(lastSync.lastSyncUtc)
+      : null;
+
   // Column defs (no generics) + RowParam keeps renderers simple and safe.
   const columns = React.useMemo<GridColDef[]>(() => {
     const cols: GridColDef[] = [];
@@ -180,7 +192,7 @@ export default function StationsDataGrid({
         headerName: "Distance (km)",
         width: 140,
         sortable: true,
-      
+
         valueGetter: (params: any) => {
           const r = params?.row ?? {};
           const raw =
@@ -189,8 +201,7 @@ export default function StationsDataGrid({
           const n = typeof raw === "string" ? Number(raw) : raw;
           return Number.isFinite(n) ? n : null;
         },
-      
-        
+
         renderCell: (params: any) => {
           const r = params?.row ?? {};
           const raw =
@@ -198,7 +209,6 @@ export default function StationsDataGrid({
           const n = typeof raw === "string" ? Number(raw) : raw;
           return n == null || !Number.isFinite(n) ? "-" : (n as number).toFixed(2);
         },
-      
 
         sortComparator: (a: number | null, b: number | null) => {
           const an = a == null ? Number.POSITIVE_INFINITY : a;
@@ -225,7 +235,7 @@ export default function StationsDataGrid({
             .sort((a, b) => compareFuelTypes(a.fuelType, b.fuelType));
           return (
             <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-              {prices.map(renderPriceChip)}
+              {prices.map((p) => renderPriceChip(p, lastSyncTime))}
             </Box>
           );
         },
@@ -233,7 +243,7 @@ export default function StationsDataGrid({
     );
 
     return cols;
-  }, [appliedVolume]);
+  }, [appliedVolume, lastSyncTime?.valueOf()]);
 
   // Responsive column visibility
   const columnVisibilityModel = React.useMemo(
@@ -279,9 +289,9 @@ export default function StationsDataGrid({
         pagination
         pageSizeOptions={[10, 25, 50]}
         initialState={{
-            pagination: { paginationModel: { pageSize: 10, page: 0 } },
-            sorting: { sortModel: toSortModel(sortBy, sortOrder) },
-          }}
+          pagination: { paginationModel: { pageSize: 10, page: 0 } },
+          sorting: { sortModel: toSortModel(sortBy, sortOrder) },
+        }}
         sortingOrder={["asc", "desc"]}
         onSortModelChange={handleSortModelChange}
         columnVisibilityModel={columnVisibilityModel}

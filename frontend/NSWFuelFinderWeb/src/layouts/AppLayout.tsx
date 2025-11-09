@@ -51,33 +51,32 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
 
-  // ---- Auth from your existing context ----
+  // Auth
   const { isAuthenticated, setSession, setSessionWithRemember, logout } = useAuth();
   const { notify } = useNotify();
 
-  // ---- Login dialog state ----
+  // Login dialog
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // ---- User menu ----
+  // User menu / profile state
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const menuOpen = Boolean(anchorEl);
   const [profile, setProfile] = useState<StoredUserProfile>(() => readStoredUserProfile());
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
 
+  // Close mobile drawer on large screen
   useEffect(() => {
     if (desktopUp && mobileOpen) setMobileOpen(false);
   }, [desktopUp, mobileOpen]);
 
+  // Listen profile change events + storage sync (多标签页同步)
   useEffect(() => {
     const handleProfileEvent = (event: Event) => {
       const custom = event as CustomEvent<StoredUserProfile>;
-      if (custom.detail) {
-        setProfile(custom.detail);
-      } else {
-        setProfile({});
-      }
+      if (custom.detail) setProfile(custom.detail);
+      else setProfile({});
     };
 
     const handleStorage = (event: StorageEvent) => {
@@ -93,35 +92,32 @@ export default function AppLayout() {
       window.removeEventListener("storage", handleStorage);
     };
   }, []);
+
+  // 登录后拉取偏好（只在没加载过的情况下）
   useEffect(() => {
     if (!isAuthenticated) {
       setPreferencesLoaded(false);
       return;
     }
-    if (preferencesLoaded) {
-      return;
-    }
+    if (preferencesLoaded) return;
 
     let cancelled = false;
     const fetchPreferences = async () => {
       try {
         const response = await getUserPreferences();
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
+
         const next = updateStoredUserProfile(
           mapPreferencesResponseToStoredProfile(response, profile.email ?? undefined)
         );
         setProfile(next);
-        setPreferencesLoaded(true);
-      } catch (err) {
-        // Ignore preference fetch errors at layout level
+        setPreferencesLoaded(true); // ✅ 成功后再置 true
+      } catch {
+        // 失败不设 true，保留下次重试机会
       }
     };
-        setPreferencesLoaded(true);
 
     fetchPreferences();
-
     return () => {
       cancelled = true;
     };
@@ -199,16 +195,52 @@ export default function AppLayout() {
               </Button>
             ) : (
               <>
-                <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small" aria-label="user menu">
-                  <Avatar
-                    sx={{ width: 32, height: 32 }}
-                    src={profile.avatarDataUrl || undefined}
-                    alt={profile.nickname || profile.email || "User"}
-                  >
-                    {profileInitial}
-                  </Avatar>
-                </IconButton>
-                <Menu anchorEl={anchorEl} open={menuOpen} onClose={() => setAnchorEl(null)}>
+                <Button
+                  variant="outlined"
+                  color="inherit"
+                  onClick={(e) => setAnchorEl(e.currentTarget)}
+                  aria-label="user menu"
+                  aria-controls={menuOpen ? "user-menu" : undefined}
+                  aria-haspopup="true"
+                  aria-expanded={menuOpen ? "true" : undefined}
+                  startIcon={
+                    <Avatar
+                      key={profile.avatarDataUrl || profileInitial} // ✅ 头像变化强制重渲染
+                      sx={{ width: 35, height: 35, ml: -0.5 }}
+                      src={profile.avatarDataUrl || undefined}
+                      alt={profile.nickname || profile.email || "User"}
+                    >
+                      {profileInitial}
+                    </Avatar>
+                  }
+                  sx={{
+                    textTransform: "none",
+                    borderRadius: 999,
+                    fontWeight: 600,
+                    px: 1.5,
+                    py: 0.5,
+                    gap: 0,
+                    borderColor: "rgba(255, 255, 255, 0.25)",
+                    color: "rgba(255, 255, 255, 0.9)",
+                    bgcolor: "rgba(255, 255, 255, 0.08)",
+                    "&:hover": {
+                      bgcolor: "rgba(255, 255, 255, 0.16)",
+                      borderColor: "rgba(255, 255, 255, 0.8)",
+                      color: "#fff",
+                    },
+                  }}
+                >
+                  Logged In
+                </Button>
+
+                <Menu
+                  id="user-menu"
+                  anchorEl={anchorEl}
+                  open={menuOpen}
+                  onClose={() => setAnchorEl(null)}
+                  anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                  transformOrigin={{ vertical: "top", horizontal: "right" }}
+                >
                   <MenuItem disabled>Logged In</MenuItem>
                   <MenuItem
                     onClick={() => {
@@ -289,13 +321,23 @@ export default function AppLayout() {
           setBusy(true);
           try {
             const tokens = await loginUser({ email, password });
-            if (setSessionWithRemember) {
-              setSessionWithRemember(tokens, !!remember);
-            } else {
-              setSession(tokens);
-            }
-            const nextProfile = updateStoredUserProfile({ email: email.trim() });
+      
+            if (setSessionWithRemember) setSessionWithRemember(tokens, !!remember);
+            else setSession(tokens);
+      
+            let nextProfile = updateStoredUserProfile({ email: email.trim() });
             setProfile(nextProfile);
+      
+            try {
+              const resp = await getUserPreferences(tokens.accessToken);
+              nextProfile = updateStoredUserProfile(
+                mapPreferencesResponseToStoredProfile(resp, email.trim())
+              );
+              setProfile(nextProfile);
+              setPreferencesLoaded(true);
+            } catch {
+            }
+      
             setLoginOpen(false);
             notify("Logged in successfully.", "success");
           } catch (err) {
@@ -310,14 +352,26 @@ export default function AppLayout() {
           try {
             await registerUser({ email, password });
             const tokens = await loginUser({ email, password });
-            if (setSessionWithRemember) {
-              // Remember newly registered users by default; adjust if needed.
-              setSessionWithRemember(tokens, true);
-            } else {
-              setSession(tokens);
-            }
-            const nextProfile = updateStoredUserProfile({ email: email.trim() });
+      
+            if (setSessionWithRemember) setSessionWithRemember(tokens, true);
+            else setSession(tokens);
+      
+            // 乐观资料
+            let nextProfile = updateStoredUserProfile({ email: email.trim() });
             setProfile(nextProfile);
+      
+            // ✅ 注册后同理：显式带 accessToken
+            try {
+              const resp = await getUserPreferences(tokens.accessToken);
+              nextProfile = updateStoredUserProfile(
+                mapPreferencesResponseToStoredProfile(resp, email.trim())
+              );
+              setProfile(nextProfile);
+              setPreferencesLoaded(true);
+            } catch {
+              // 忽略失败
+            }
+      
             setLoginOpen(false);
             notify("Account created successfully.", "success");
           } catch (err) {

@@ -14,6 +14,8 @@ import {
   CircularProgress,
 } from "@mui/material";
 
+import dayjs from "dayjs";
+import { useLastSync } from "../hooks/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { useServerStatus } from "../hooks/useServerStatus";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
@@ -97,6 +99,14 @@ function buildCheapestFromNearby(stations: NearbyFuelStation[]): CheapestPriceRe
 }
 
 export default function OverviewPage() {
+  const { data: lastSync } = useLastSync();
+  const lastSyncDisplay = lastSync?.lastSyncUnixMs
+  ? dayjs(lastSync.lastSyncUnixMs).format("YYYY-MM-DD HH:mm")
+  : lastSync?.lastSyncSydney
+  ? dayjs(lastSync.lastSyncSydney).format("YYYY-MM-DD HH:mm")
+  : lastSync?.lastSyncUtc
+  ? dayjs(lastSync.lastSyncUtc).format("YYYY-MM-DD HH:mm")
+  : null;
   const qc = useQueryClient();
   const { notify } = useNotify();
   const theme = useTheme();
@@ -564,20 +574,20 @@ export default function OverviewPage() {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {customFilterActive
-          ? "Welcome back! Your customized filter is enabled, by you, for you."
-          : "Select fuel types to view the cheapest stations across NSW. Data refreshes twice daily."}
+          ? `Welcome back! Your customized filter is enabled, by you, for you. Data last updated at ${lastSyncDisplay ?? "—"}.`
+          : `Select fuel types to view the cheapest stations across NSW. Data last updated at ${lastSyncDisplay ?? "—"}.`}
       </Typography>
 
       {/* Server status banner */}
       {serverStatus !== "healthy" && (
         <Box sx={{ mb: 2 }}>
-          {(serverStatus === "waking" || serverStatus === "degraded") && (
+          {(serverStatus === "unknown"|| serverStatus === "waking" || serverStatus === "degraded" ) && (
             <WakeBanner serverStatus={serverStatus} />
           )}
 
-          {serverStatus === "unknown" && (
+          {/* {serverStatus === "unknown" && (
             <Alert severity="info">Checking backend status…</Alert>
-          )}
+          )} */}
 
           {serverStatus === "unreachable" && (
             <Alert

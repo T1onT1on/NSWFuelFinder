@@ -161,3 +161,32 @@ export const useStationTrends = (
     gcTime: options?.gcTime ?? 5 * 60 * 1000,
   });
 };
+
+export type LastSyncResponse = {
+  hasValue: boolean;
+  source?: "cache" | "database";
+  lastSyncUtc?: string;     // "YYYY-MM-DD HH:mm:ss UTC"
+  lastSyncSydney?: string;  // "YYYY-MM-DD HH:mm:ss +11:00"
+  lastSyncUnixMs?: number;
+};
+
+export const useLastSync = (options?: UseQueryExtras) => {
+  const client = useApiClient();
+  const enabled = options?.enabled ?? true;
+
+  return useQuery<LastSyncResponse>({
+    queryKey: ["last-sync"],
+    queryFn: async () => {
+      const { data } = await client.get<LastSyncResponse>("/api/system/last-sync");
+      return data;
+    },
+    enabled,
+    retry: options?.retry ?? 0,
+    staleTime: options?.staleTime ?? 5 * 60 * 1000,
+    gcTime: options?.gcTime ?? 10 * 60 * 1000,
+    refetchOnMount: options?.refetchOnMount ?? "always",
+    refetchOnReconnect: options?.refetchOnReconnect ?? "always",
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? "always",
+    refetchInterval: options?.refetchInterval ?? false,
+  });
+};
