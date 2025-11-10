@@ -6,19 +6,23 @@ import { useApiClient } from "./useApiClient";
 export type ServerStatus = "unknown" | "waking" | "degraded" | "healthy" | "unreachable" | "backend_error";
 
 export type UseServerStatusOptions = {
-  healthPath?: string;           // 默认为 /healthz
+  healthPath?: string;           // 默认为 /readyz（就绪探针）
   pollWhileUnreadyMs?: number;   // 默认 3000
   pollWhileHealthyMs?: number;   // 默认 60000
 };
 
 // 进程级记忆：如果发现需要回退，就记住，不要每次都多打一跳
-let _preferApiHealthz = false;
+// 进程级记忆：探针回退阶段
+// 0 => /readyz, 1 => /healthz, 2 => /api/healthz
+let _probeStage = 0;
 
 export function useServerStatus(opts?: UseServerStatusOptions) {
   const client = useApiClient();
   const qc = useQueryClient();
-  const basePreferred = opts?.healthPath ?? "/healthz";
-  const preferredPath = _preferApiHealthz ? "/api/healthz" : basePreferred;
+  // 默认优先 /readyz（可从外部覆写为其他路径）
+  const basePreferred = opts?.healthPath ?? "/readyz";
+  const preferredPath =
+  _probeStage === 0 ? basePreferred : _probeStage === 1 ? "/healthz" : "/api/healthz";
 
   const unreadyMs = opts?.pollWhileUnreadyMs ?? 3000;
   const healthyMs = opts?.pollWhileHealthyMs ?? 60000;
@@ -33,6 +37,7 @@ export function useServerStatus(opts?: UseServerStatusOptions) {
 
         const hinted = String(body?.status ?? "").toLowerCase();
         let mapped: ServerStatus =
+          // /readyz 未就绪时会返回 503，映射为 "waking"
           code >= 200 && code < 300 ? "healthy" : code === 503 ? "waking" : "backend_error";
         if (hinted === "ok" || hinted === "healthy") mapped = "healthy";
         else if (hinted === "waking" || hinted === "starting" || hinted === "warmup") mapped = "waking";
@@ -42,13 +47,11 @@ export function useServerStatus(opts?: UseServerStatusOptions) {
       } catch (e: any) {
         const code: number | undefined = e?.response?.status;
 
-        // 如果是 404，且当前不是 /api/healthz，自动回退一次到 /api/healthz
-        if (code === 404 && preferredPath !== "/api/healthz") {
-          _preferApiHealthz = true;
-          // 触发一次立即重试（使用新的 queryKey）
+        if (code === 404 && _probeStage < 2) {
+          _probeStage += 1;
           qc.invalidateQueries({ queryKey: ["server-status", preferredPath] });
-          throw new Error("healthz 404, switching to /api/healthz");
-        }
+          throw new Error("probe 404, fallback to next path");
+          }
 
         if (typeof code === "number") {
           const mapped: ServerStatus = code === 503 ? "waking" : code >= 500 ? "backend_error" : "unreachable";
