@@ -1,12 +1,17 @@
+using System;
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NSWFuelFinder.Data;
 using NSWFuelFinder.Models.FuelApi;
-using Microsoft.Extensions.Caching.Memory;
+using Npgsql; // NEW: for advisory lock with PostgreSQL
 
 namespace NSWFuelFinder.Services;
 
@@ -41,17 +46,18 @@ public sealed class FuelDataSyncService : BackgroundService
         {
             await using var scope0 = _scopeFactory.CreateAsyncScope();
             var db0 = scope0.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
+
+            // CHANGED: single aggregate MaxAsync instead of loading all timestamps
             var last = await db0.Stations.AsNoTracking()
-                .Select(s => s.SyncedAtUtc)
-                .DefaultIfEmpty()
+                .Select(s => (DateTimeOffset?)s.SyncedAtUtc)
                 .MaxAsync(stoppingToken);
 
-            if (last != default)
+            if (last.HasValue && last.Value != default)
             {
                 var tz0 = GetNswTimeZone();
-                var local0 = TimeZoneInfo.ConvertTime(last, tz0);
+                var local0 = TimeZoneInfo.ConvertTime(last.Value, tz0);
                 _logger.LogInformation("Startup: last fuel sync in DB => {Utc} UTC / {Local} Sydney",
-                    last.ToString("yyyy-MM-dd HH:mm:ss"),
+                    last.Value.ToString("yyyy-MM-dd HH:mm:ss"),
                     local0.ToString("yyyy-MM-dd HH:mm:ss zzz"));
             }
             else
@@ -84,9 +90,8 @@ public sealed class FuelDataSyncService : BackgroundService
                         await using var scope1 = _scopeFactory.CreateAsyncScope();
                         var db1 = scope1.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
                         var lastNow = await db1.Stations.AsNoTracking()
-                            .Select(s => s.SyncedAtUtc)
-                            .DefaultIfEmpty()
-                            .MaxAsync(stoppingToken);
+                            .Select(s => (DateTimeOffset?)s.SyncedAtUtc)
+                            .MaxAsync(stoppingToken) ?? DateTimeOffset.MinValue;
 
                         var tz1 = GetNswTimeZone();
                         var local1 = TimeZoneInfo.ConvertTime(lastNow, tz1);
@@ -148,35 +153,54 @@ public sealed class FuelDataSyncService : BackgroundService
         _logger.LogInformation("Fuel data sync service stopping.");
     }
 
+    // === Catch-up controls (NEW) ===
+    private static readonly TimeSpan CatchupGrace = TimeSpan.FromMinutes(3);      // tolerate tiny clock/timing skews
+    private static readonly TimeSpan CatchupCooldown = TimeSpan.FromHours(2);     // optional guard near next window (currently not enforced)
+    private const long AdvisoryLockKey = 823741234987654321L;                     // arbitrary unique 64-bit key for pg advisory lock
+
     // Decide whether to run now:
-    // - Only run inside the scheduled local-hour "window" (e.g., HH:00 ~ HH:00+WindowAfterMinutes)
-    // - And respect a small debounce to avoid double-runs on close restarts
+    // - Run inside scheduled local-hour window (HH:00 ~ HH:00+WindowAfterMinutes)
+    // - Debounce repeated runs (MinIntervalBetweenSyncs)
+    // - NEW: Catch-up if we missed the most recent expected window start
     private async Task<(bool ShouldSynchronise, DateTimeOffset? LastSyncUtc, string Reason)>
         EvaluateSyncRequirementAsync(CancellationToken cancellationToken)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
 
-        var syncTimestamps = await dbContext.Stations
-            .AsNoTracking()
-            .Select(s => s.SyncedAtUtc)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
+        // CHANGED: single aggregate, null if no rows
+        var lastSync = await dbContext.Stations.AsNoTracking()
+            .Select(s => (DateTimeOffset?)s.SyncedAtUtc)
+            .MaxAsync(cancellationToken);
 
-        var hasAny = syncTimestamps.Count > 0;
-        var lastSync = hasAny ? syncTimestamps.Max() : (DateTimeOffset?)null;
-
-        // First-run: if no data yet，允许立即跑（不受窗口限制）
-        if (!hasAny)
+        // First-run: if no data yet, run immediately (no window restriction)
+        if (lastSync is null)
             return (true, null, "first-run");
 
-        // Check the scheduled window in local time
         var nowUtc = DateTimeOffset.UtcNow;
+
+        // NEW: Catch-up logic — if we already passed the most recent expected window start,
+        // but DB lastSync is still before that expected start, run once to catch up.
+        var expectedStartUtc = GetMostRecentExpectedWindowStartUtc(nowUtc); // window start in UTC
+        if (nowUtc >= expectedStartUtc + CatchupGrace && lastSync.Value < expectedStartUtc - CatchupGrace)
+        {
+            // Debounce: avoid immediate reruns if something just ran
+            if (nowUtc - lastSync.Value < MinIntervalBetweenSyncs)
+                return (false, lastSync, "debounced-too-soon");
+
+            // Optional protection: skip catch-up if the next official window is very close
+            // var nextDueUtc = nowUtc + CalculateDelayUntilNextRun(nowUtc);
+            // if (nextDueUtc - nowUtc < CatchupCooldown)
+            //     return (false, lastSync, "skip-catchup-near-next-window");
+
+            return (true, lastSync, "catch-up-missed-window"); // NEW
+        }
+
+        // Regular scheduled window check
         if (!IsInScheduledLocalWindow(nowUtc))
             return (false, lastSync, "outside-schedule-window");
 
-        // Debounce to avoid double run around restarts
-        var timeSinceLastSync = nowUtc - lastSync!.Value;
+        var timeSinceLastSync = nowUtc - lastSync.Value;
         if (timeSinceLastSync < MinIntervalBetweenSyncs)
             return (false, lastSync, "debounced-too-soon");
 
@@ -196,6 +220,31 @@ public sealed class FuelDataSyncService : BackgroundService
             utcText, localText, willSynchronise, reason);
     }
 
+    // NEW: compute the most-recent expected window start (Sydney local) and convert to UTC
+    private static DateTimeOffset GetMostRecentExpectedWindowStartUtc(DateTimeOffset nowUtc)
+    {
+        var tz = GetNswTimeZone();
+        var nowLocal = TimeZoneInfo.ConvertTime(nowUtc, tz); // Sydney local
+        var hoursAsc = SyncHoursLocal.OrderBy(h => h).ToArray();
+
+        int? candidateHour = hoursAsc.LastOrDefault(h => new TimeSpan(h, 0, 0) <= nowLocal.TimeOfDay);
+        DateTime localStart;
+
+        if (candidateHour.HasValue)
+        {
+            localStart = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, candidateHour.Value, 0, 0, DateTimeKind.Unspecified);
+        }
+        else
+        {
+            // none today yet -> last window of yesterday
+            var lastHour = hoursAsc.Last();
+            localStart = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, lastHour, 0, 0, DateTimeKind.Unspecified).AddDays(-1);
+        }
+
+        var utcStart = TimeZoneInfo.ConvertTimeToUtc(localStart, tz);
+        return new DateTimeOffset(utcStart, TimeSpan.Zero);
+    }
+
     private async Task SynchroniseAsync(CancellationToken cancellationToken)
     {
         var response = await _fuelApiClient.GetAllPricesAsync(cancellationToken).ConfigureAwait(false);
@@ -204,63 +253,97 @@ public sealed class FuelDataSyncService : BackgroundService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FuelFinderDbContext>();
 
-        var executionStrategy = dbContext.Database.CreateExecutionStrategy();
-        await executionStrategy.ExecuteAsync(async () =>
+        // NEW: advisory lock to avoid concurrent full-syncs across instances
+        var conn = (NpgsqlConnection)dbContext.Database.GetDbConnection();
+        var shouldClose = conn.State != System.Data.ConnectionState.Open;
+        if (shouldClose) await conn.OpenAsync(cancellationToken);
+
+        bool gotLock = false;
+        await using (var cmd = new NpgsqlCommand("SELECT pg_try_advisory_lock(@k)", conn))
         {
-            dbContext.ChangeTracker.Clear();
+            cmd.Parameters.AddWithValue("k", AdvisoryLockKey);
+            var scalar = await cmd.ExecuteScalarAsync(cancellationToken);
+            gotLock = scalar is bool b && b;
+        }
 
-            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        if (!gotLock)
+        {
+            _logger.LogInformation("Another sync is running (advisory lock not acquired). Skipping this run.");
+            if (shouldClose) await conn.CloseAsync();
+            return;
+        }
 
-            await dbContext.Prices.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            await dbContext.Stations.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-
-            var stationEntities = response.Stations
-                .Where(station => !string.IsNullOrWhiteSpace(station.Code))
-                .Select(station => MapStation(station, syncTimestamp))
-                .ToList();
-
-            await dbContext.Stations.AddRangeAsync(stationEntities, cancellationToken).ConfigureAwait(false);
-
-            var priceEntities = response.Prices
-                .Where(price => !string.IsNullOrWhiteSpace(price.StationCode) && !string.IsNullOrWhiteSpace(price.FuelType))
-                .Select(MapPrice)
-                .ToList();
-
-            await dbContext.Prices.AddRangeAsync(priceEntities, cancellationToken).ConfigureAwait(false);
-
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-            var historyEntries = priceEntities.Select(p => new FuelPriceHistoryEntity
+        try
+        {
+            var executionStrategy = dbContext.Database.CreateExecutionStrategy();
+            await executionStrategy.ExecuteAsync(async () =>
             {
-                StationCode = p.StationCode,
-                FuelType = p.FuelType,
-                Price = p.Price,
-                RecordedAtUtc = syncTimestamp
-            }).ToList();
+                dbContext.ChangeTracker.Clear();
 
-            await dbContext.PriceHistory.AddRangeAsync(historyEntries, cancellationToken).ConfigureAwait(false);
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await dbContext.Prices.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await dbContext.Stations.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
-            _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.",
-                historyEntries.Count, syncTimestamp);
+                var stationEntities = response.Stations
+                    .Where(station => !string.IsNullOrWhiteSpace(station.Code))
+                    .Select(station => MapStation(station, syncTimestamp))
+                    .ToList();
 
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                await dbContext.Stations.AddRangeAsync(stationEntities, cancellationToken).ConfigureAwait(false);
 
-            // Persist the last full-sync timestamp to memory cache for quick reads.
-            _cache.Set(LastFuelSyncUtcCacheKey, syncTimestamp, new MemoryCacheEntryOptions
+                var priceEntities = response.Prices
+                    .Where(price => !string.IsNullOrWhiteSpace(price.StationCode) && !string.IsNullOrWhiteSpace(price.FuelType))
+                    .Select(MapPrice)
+                    .ToList();
+
+                await dbContext.Prices.AddRangeAsync(priceEntities, cancellationToken).ConfigureAwait(false);
+
+                await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                var historyEntries = priceEntities.Select(p => new FuelPriceHistoryEntity
+                {
+                    StationCode = p.StationCode,
+                    FuelType = p.FuelType,
+                    Price = p.Price,
+                    RecordedAtUtc = syncTimestamp
+                }).ToList();
+
+                await dbContext.PriceHistory.AddRangeAsync(historyEntries, cancellationToken).ConfigureAwait(false);
+
+                await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                _logger.LogInformation("Persisted {HistoryCount} price history rows for sync at {Timestamp}.",
+                    historyEntries.Count, syncTimestamp);
+
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+                // Persist the last full-sync timestamp to memory cache for quick reads.
+                _cache.Set(LastFuelSyncUtcCacheKey, syncTimestamp, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(1) // will be refreshed on each successful sync
+                });
+
+                // Log both UTC and Sydney-local for debugging/observability.
+                var tz = GetNswTimeZone();
+                var local = TimeZoneInfo.ConvertTime(syncTimestamp, tz);
+                _logger.LogInformation("Last fuel sync set. UTC={Utc}, SydneyLocal={Local}.",
+                    syncTimestamp.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
+                    local.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            // release advisory lock
+            await using (var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock(@k)", conn))
             {
-                // Cache for a day; it will be refreshed on each successful sync anyway.
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(1)
-            });
+                unlock.Parameters.AddWithValue("k", AdvisoryLockKey);
+                await unlock.ExecuteNonQueryAsync(cancellationToken);
+            }
 
-            // Log both UTC and Sydney-local for debugging/observability.
-            var tz = GetNswTimeZone();
-            var local = TimeZoneInfo.ConvertTime(syncTimestamp, tz);
-            _logger.LogInformation("Last fuel sync set. UTC={Utc}, SydneyLocal={Local}.",
-                syncTimestamp.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
-                local.ToString("yyyy-MM-dd HH:mm:ss zzz"));
-        }).ConfigureAwait(false);
+            if (conn.State == System.Data.ConnectionState.Open)
+                await conn.CloseAsync();
+        }
     }
 
     private static FuelStationEntity MapStation(FuelStationPayload station, DateTimeOffset syncTimestamp)
@@ -476,7 +559,7 @@ public sealed class FuelDataSyncService : BackgroundService
             return null;
         }
 
-        var suburbTokens = new List<string>();
+        var suburbTokens = new System.Collections.Generic.List<string>();
         for (var i = tokens.Length - 1; i >= 0; i--)
         {
             var token = tokens[i].Trim().TrimEnd('.', ',');
@@ -513,7 +596,7 @@ public sealed class FuelDataSyncService : BackgroundService
     private static readonly Regex StateOnlyRegex = new(@"\b(ACT|NSW|VIC|QLD|SA|WA|TAS|NT)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PostcodeOnlyRegex = new(@"\b\d{4}\b", RegexOptions.Compiled);
 
-    private static readonly HashSet<string> RoadTokens = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly System.Collections.Generic.HashSet<string> RoadTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "RD", "ROAD", "ST", "STREET", "AVE", "AVENUE", "HWY", "HIGHWAY",
         "DR", "DRIVE", "LN", "LANE", "WAY", "BLVD", "BOULEVARD", "CT", "COURT",
@@ -523,7 +606,7 @@ public sealed class FuelDataSyncService : BackgroundService
 
     // Sydney-local hours to run the sync job.
     private static readonly int[] SyncHoursLocal = new[] { 2, 6, 8, 10, 12, 14, 16, 18, 20, 22 };
-    private static readonly HashSet<int> SyncHoursLocalSet = SyncHoursLocal.ToHashSet();
+    private static readonly System.Collections.Generic.HashSet<int> SyncHoursLocalSet = SyncHoursLocal.ToHashSet();
 
     // Window length after a scheduled hour (e.g., allow HH:00 ~ HH:00+10m to run)
     private const int WindowAfterMinutes = 10;
